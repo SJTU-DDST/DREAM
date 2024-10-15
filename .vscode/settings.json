@@ -79,6 +79,12 @@
     "__tree": "cpp",
     "__tuple": "cpp",
     "__verbose_abort": "cpp",
-    "ios": "cpp"
+    "ios": "cpp",
+    "list": "cpp",
+    "bitset": "cpp",
+    "format": "cpp",
+    "locale": "cpp",
+    "charconv": "cpp",
+    "forward_list": "cpp"
   }
 }

@@ -1,3 +1,4 @@
+// #define RETRY_CAS
 #include "sephash.h"
 namespace SEPHASH
 {
@@ -268,6 +269,7 @@ task<uintptr_t> Client::check_gd(uint64_t segloc = -1,bool read_fp = false)
 
 task<> Client::insert(Slice *key, Slice *value)
 {
+    // log_err("insert key:%lu value:%s", *(uint64_t *)key->data, value->data);
     perf.start_perf();
     sum_cost.start_insert();
     op_cnt++;
@@ -736,6 +738,7 @@ task<> Client::print_main_seg(uint64_t seg_loc,uintptr_t main_seg_ptr, uint64_t 
 
 task<std::tuple<uintptr_t, uint64_t>> Client::search(Slice *key, Slice *value)
 {
+    // log_err("search key:%lu value:%s", *(uint64_t *)key->data, value->data);
     perf.start_perf();
     // 1. Cal Segloc && Pattern
     uint64_t pattern = (uint64_t)hash(key->data, key->len);
@@ -755,7 +758,7 @@ Retry:
     uintptr_t cur_seg_ptr = dir->segs[segloc].cur_seg_ptr;
     uintptr_t main_seg_ptr = dir->segs[segloc].main_seg_ptr;
     uint64_t main_seg_len = dir->segs[segloc].main_seg_len;
-    if(cur_seg_ptr==0 || main_seg_ptr == 0){
+    if(cur_seg_ptr==0 || main_seg_ptr == 0){ // FIXME: stuck here, main_seg_ptr is 0 when load_num < num_op
         // log_err("seg_loc:%lu,cur_seg_ptr:%lx main_seg_ptr:%lx",segloc,cur_seg_ptr,main_seg_ptr);
         cur_seg_ptr = co_await check_gd(segloc,true);
         this->offset[segloc].offset = 0;
@@ -928,8 +931,10 @@ Retry:
 //     co_return;
 // }
 
+// 找到对应的slot，然后CAS更新slot的内容
 task<> Client::update(Slice *key, Slice *value)
 {
+    // log_err("before update key:%lu value:%s cli_id:%d", *(uint64_t *)key->data, value->data,cli_id);
     uint64_t pattern = (uint64_t)hash(key->data, key->len);
     KVBlock *kv_block = InitKVBlock(key, value, &alloc);
     uint64_t kvblock_len = key->len + value->len + sizeof(uint64_t) * 2;
@@ -939,7 +944,7 @@ task<> Client::update(Slice *key, Slice *value)
     char data[1024];
     Slice ret_value;
     ret_value.data = data;
-    auto [slot_ptr, old_slot] = co_await search(key, &ret_value);
+    auto [slot_ptr, old_slot] = co_await search(key, &ret_value); // FIXME: may stuck when load_num < num_op
     
     Slot *tmp = (Slot *)alloc.alloc(sizeof(Slot));
     Slot old = (Slot) old_slot;
@@ -952,11 +957,26 @@ task<> Client::update(Slice *key, Slice *value)
 
     if (slot_ptr != 0ull)
     {
+        // log_err("old kvblock_ptr:%lx offset:%lx",ralloc.ptr(old.offset),old.offset);
+        // log_err("new kvblock_ptr:%lx offset:%lx",kvblock_ptr,tmp->offset);
         // log_err("[%lu:%lu]slot_ptr:%lx slot:%lx for %lu to be updated with new slot: fp:%d len:%d offset:%lx",cli_id,coro_id,slot_ptr,old_slot,*(uint64_t*)key->data,tmp->fp,tmp->len,tmp->offset);
         // 3rd RTT: Setting the key-value block to full zero
-        if (!co_await conn->cas_n(slot_ptr, seg_rmr.rkey, old_slot, *(uint64_t*)tmp)){
-            log_err("[%lu:%lu]Fail to update key : %lu",cli_id,coro_id,*(uint64_t*)key->data);
+        #ifdef RETRY_CAS
+        int retry_count = 0;
+        while (retry_count < 100) {
+            if (co_await conn->cas_n(slot_ptr, seg_rmr.rkey, old_slot, *(uint64_t*)tmp)) {
+            break;
+            }
+            retry_count++;
         }
+        if (retry_count >= 100) {
+            // log_err("[%lu:%lu]Fail to update key : %lu after 100 retries", cli_id, coro_id, *(uint64_t*)key->data);
+        }
+        #else
+        if (!co_await conn->cas_n(slot_ptr, seg_rmr.rkey, old_slot, *(uint64_t*)tmp)){
+            // log_err("[%lu:%lu]Fail to update key : %lu",cli_id,coro_id,*(uint64_t*)key->data);
+        }
+        #endif
     }else{
         log_err("[%lu:%lu]No match key for %lu to update",cli_id,coro_id,*(uint64_t*)key->data);
     }

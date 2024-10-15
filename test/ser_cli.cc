@@ -17,6 +17,7 @@
 #include <set>
 #include <stdint.h>
 #define ORDERED_INSERT
+#define ALLOW_KEY_OVERLAP
 Config config;
 uint64_t load_num;
 using ClientType = SEPHASH::Client;
@@ -90,19 +91,27 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         op_frac = op_chooser();
         if (op_frac < config.insert_frac)
         {
+            #ifdef ALLOW_KEY_OVERLAP
+            tmp_key = GenKey(gen->operator()(key_chooser()));
+            #else
             tmp_key = GenKey(
                 load_num +
                 (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * load_avr +
                 gen->operator()(key_chooser()));
+            #endif
             // log_err("run insert:%lu",tmp_key);
             co_await cli->insert(&key, &value);
         }
         else if (op_frac < read_frac)
         {
             ret_value.len = 0;
+            #ifdef ALLOW_KEY_OVERLAP
+            tmp_key = GenKey(gen->operator()(key_chooser()));
+            #else
             tmp_key = GenKey(
                 (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * load_avr +
                 gen->operator()(key_chooser()));
+            #endif
             // log_err("run search:%lu",tmp_key);
             co_await cli->search(&key, &ret_value);
             // if (ret_value.len != value.len || memcmp(ret_value.data, value.data, value.len) != 0)
@@ -116,9 +125,16 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         else if (op_frac < update_frac)
         {
             // update
+            #ifdef ALLOW_KEY_OVERLAP
+            tmp_key = GenKey(gen->operator()(key_chooser()));
+            #else
             tmp_key = GenKey(
                 (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * load_avr +
-                gen->operator()(key_chooser()));
+                gen->operator()(key_chooser())); // 每个coro_id对应load_avr个条目，互相不重叠
+            #endif
+            // log_err("cli_id:%lu coro_id:%lu update:%lu", cli_id, coro_id, tmp_key);
+            // log_err("machine_id:%lu cli_id:%lu coro_id:%lu update:%lu load_avr:%lu", config.machine_id, cli_id,
+            //         coro_id, tmp_key, load_avr);
             co_await cli->update(&key, &update_value);
             // auto [slot_ptr, slot] = co_await cli->search(&key, &ret_value);
             // if (slot_ptr == 0ull)
@@ -133,9 +149,13 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         else
         {
             // delete
+            #ifdef ALLOW_KEY_OVERLAP
+            tmp_key = GenKey(gen->operator()(key_chooser()));
+            #else
             tmp_key = GenKey(
                 (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * load_avr +
                 gen->operator()(key_chooser()));
+            #endif
             co_await cli->remove(&key);
             // uint64_t cnt = 0;
             // while(true){
@@ -250,7 +270,11 @@ int main(int argc, char *argv[])
         // ths[config.num_cli].join();
 
         printf("Run start\n");
+        #ifdef ALLOW_KEY_OVERLAP
+        auto op_per_coro = config.num_op;
+        #else
         auto op_per_coro = config.num_op / (config.num_machine * config.num_cli * config.num_coro);
+        #endif
         std::vector<Generator *> gens;
         for (uint64_t i = 0; i < config.num_cli * config.num_coro; i++)
         {

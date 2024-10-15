@@ -20,14 +20,17 @@ coro_num = args.coro_num
 
 # Define the connection information for each server
 servers = [
-    {'host': '192.168.1.51', 'user': 'xxx', 'password': 'xxx'},
-    {'host': '192.168.1.52', 'user': 'xxx', 'password': 'xxx'},
-    {'host': '192.168.1.53', 'user': 'xxx', 'password': 'xxx'},
-    {'host': '192.168.1.11', 'user': 'xxx', 'password': 'xxx'},
-    {'host': '192.168.1.12', 'user': 'xxx', 'password': 'xxx'},
-    {'host': '192.168.1.13', 'user': 'xxx', 'password': 'xxx'},
-    {'host': '192.168.1.14', 'user': 'xxx', 'password': 'xxx'},
-    {'host': '192.168.1.10', 'user': 'xxx', 'password': 'xxx'},
+    # {'host': '192.168.98.71', 'user': 'congyong', 'password': '1111'},
+    # {'host': '192.168.98.72', 'user': 'congyong', 'password': '1111'},
+    # {'host': '192.168.98.73', 'user': 'congyong', 'password': '1111'},
+    {'host': '192.168.98.74', 'user': 'congyong', 'password': '1111'},
+    # {'host': '192.168.1.52', 'user': 'xxx', 'password': 'xxx'},
+    # {'host': '192.168.1.53', 'user': 'xxx', 'password': 'xxx'},
+    # {'host': '192.168.1.11', 'user': 'xxx', 'password': 'xxx'},
+    # {'host': '192.168.1.12', 'user': 'xxx', 'password': 'xxx'},
+    # {'host': '192.168.1.13', 'user': 'xxx', 'password': 'xxx'},
+    # {'host': '192.168.1.14', 'user': 'xxx', 'password': 'xxx'},
+    # {'host': '192.168.1.10', 'user': 'xxx', 'password': 'xxx'},
     # Add more servers if needed
 ]
 

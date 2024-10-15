@@ -102,7 +102,7 @@ public:
 
 class zipf99 : public Generator
 {
-    const double theta = .99;
+    const double theta = .99; // TODO: add to argument
     const double alpha = 1. / (1. - theta);
     const double zeta2theta = zeta(2);
     uint64_t items;
