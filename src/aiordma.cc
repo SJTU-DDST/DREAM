@@ -1,4 +1,5 @@
 #include "aiordma.h"
+#include "sephash.h"
 
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -17,7 +18,7 @@
 
 const ibv_qp_cap sr_qp_cap = {
     .max_send_wr = 64,
-    .max_recv_wr = 32,
+    .max_recv_wr = 1024, // 32,
     .max_send_sge = 1,
     .max_recv_sge = 1,
     .max_inline_data = 256,
@@ -99,7 +100,7 @@ enum
     rdma_exchange_proto_ready,
 };
 
-struct __rdma_exchange_t
+struct __rdma_exchange_t // TODO: 这里加上seg id
 {
     uint16_t proto;
     uint16_t lid;
@@ -107,6 +108,8 @@ struct __rdma_exchange_t
     uint32_t rkey;
     uint64_t raddr;
     ibv_gid gid;
+    uint8_t is_signal_conn; // 0: normal, 1: signal
+    uint64_t segloc;
 };
 
 rdma_dev::rdma_dev(const char *dev_name, int _ib_port, int _gid_idx)
@@ -345,12 +348,21 @@ std::tuple<doca_mmap *, void *> rdma_dev::reg_mmap(uint32_t mmap_id, size_t len,
 }
 #endif
 
-rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap, int tempmp_size, int _max_coros, int cq_size)
-    : dev(_dev), qp_cap(_qp_cap), max_coros(_max_coros)
+rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
+                         int tempmp_size, int _max_coros, int cq_size,
+                         Directory *_dir, ibv_cq *existing_cq,
+                         std::shared_ptr<std::vector<rdma_coro>> existing_coros,
+                         std::shared_ptr<uint32_t> existing_free_head)
+    : dev(_dev), qp_cap(_qp_cap), max_coros(_max_coros), dir(_dir),
+      cq(existing_cq), coros(existing_coros), free_head(existing_free_head)
 {
+    // log_err("rdma_worker init start, tempmp_size: %d, max_coros: %d, cq_size: %d, max_send_wr: %d, max_recv_wr: %d", tempmp_size, max_coros, cq_size, qp_cap.max_send_wr, qp_cap.max_recv_wr);
+    // server: max_send_wr: 0, max_recv_wr: 0
+    // client: max_send_wr: 64, max_recv_wr: 0
     if (qp_cap.max_send_wr == 0 && qp_cap.max_recv_wr == 0)
     {
-        assert_require(cq = dev.create_cq(1));
+        if (!cq)
+            assert_require(cq = dev.create_cq(1));
         return;
     }
     if (tempmp_size > 0)
@@ -361,33 +373,77 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap, int tempmp_s
     if (max_coros > 8)
     {
         assert_require(max_coros < rdma_coro_none);
-        coros = new rdma_coro[max_coros];
-        assert_require(coros && is_times_ofN((uintptr_t)coros, sizeof(rdma_coro)));
-        free_head = 0;
-        coros[0].id = 0;
-        for (int i = 1; i < max_coros; ++i)
+        if (!free_head)
         {
-            coros[i].id = i;
-            coros[i - 1].next = i;
+            free_head = std::make_shared<uint32_t>(0);
+            // log_err("创建free_head: %p", free_head);
         }
-        coros[max_coros - 1].next = rdma_coro_none;
+        else
+        {
+            // log_err("free_head: %p已经存在，不需要创建", free_head.get());
+        }
+        if (!coros) {
+            coros = std::make_shared<std::vector<rdma_coro>>(max_coros);
+            assert_require(coros); // assert_require(coros && is_times_ofN((uintptr_t)coros, sizeof(rdma_coro)));
+            (*coros)[0].id = 0;
+            for (int i = 1; i < max_coros; ++i)
+            {
+                (*coros)[i].id = i;
+                (*coros)[i - 1].next = i;
+            }
+            (*coros)[max_coros - 1].next = rdma_coro_none;
+            // log_err("创建coros: %p, free_head: %p, max_coros: %d", coros.get(), free_head.get(), max_coros);
+        } // else log_err("coros: %p已经存在，不需要创建", coros.get());
     }
-    assert_require(cq = dev.create_cq(cq_size));
+    if (!cq) {
+        assert_require(cq = dev.create_cq(cq_size));
+        // log_err("创建CQ: %p, cq_size: %d", cq, cq_size); // server: 1024, client: 64
+    }
+    // else log_err("cq: %p已经存在，不需要创建", cq);
+    if (qp_cap.max_recv_wr) {
+        assert_require(srqs[0] = dev.create_srq(cq_size));
+        assert_require(dir);// 此时dir还没初始化
+        CurSeg *cur_seg = reinterpret_cast<CurSeg *>(dir->segs[0].cur_seg_ptr);
+        cur_seg->seg_meta.srq = srqs[0];
+#if RDMA_SIGNAL
+        assert_require(signal_srq = dev.create_srq(cq_size));
+#endif
+        // log_err("是server，创建SRQ和signal_srq, cq_size: %d", cq_size);
+    } // else log_err("是client，不创建SRQ");
     if (qp_cap.max_recv_wr > 0)
         assert_require(pending_tasks = new task_ring());
     assert_require(yield_handler = new handle_ring(max_coros));
+#if CORO_DEBUG
+    if (!qp_cap.max_recv_wr) // client
+        start_periodic_task();
+#endif
 }
 
 rdma_worker::~rdma_worker()
 {
+#if CORO_DEBUG
+    stop_periodic_task();
+#endif
     if (cq && ibv_destroy_cq(cq))
         log_warn("failed to destory cq");
+    log_err("准备销毁%d个SRQ", srqs.size());
+    for (auto srq : srqs)
+    {
+        if (srq && ibv_destroy_srq(srq))
+            log_warn("failed to destroy srq");
+        else if (srq)
+            log_err("成功销毁SRQ %p", srq);
+    }
+#if RDMA_SIGNAL
+    if (signal_srq && ibv_destroy_srq(signal_srq))
+        log_warn("failed to destory signal srq");
+#endif
     if (mpmr)
         rdma_free_mr(mpmr, false);
     if (mp)
         delete mp;
-    if (coros)
-        delete[] coros;
+    // if (coros)
+    //     delete[] coros; // now the shared_ptr will delete it
     if (pending_tasks)
         delete pending_tasks;
     if (yield_handler)
@@ -411,42 +467,114 @@ rdma_worker::~rdma_worker()
         delete pending_dma_task;
 #endif
 }
-
-rdma_coro *rdma_worker::alloc_coro(uint16_t conn_id)
+rdma_coro *rdma_worker::alloc_coro(uint16_t conn_id DEBUG_LOCATION_DEFINE DEBUG_CORO_DEFINE)
 {
-    if (free_head == rdma_coro_none)
+    if (*free_head == rdma_coro_none)
         return nullptr;
-    auto local_head = free_head;
-    rdma_coro *res = coros + local_head;
+    auto local_head = *free_head;
+    // rdma_coro *res = coros + local_head;
+    rdma_coro *res = &(*coros)[local_head]; // 使用 &(*coros)[index] 获取指针
 #ifdef ALLOC_CORO_THREAD_SAFE
     while (!__atomic_compare_exchange_n(&free_head, &local_head, res->next, false, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
         res = coros + local_head;
 #else
-    free_head = res->next;
+    *free_head = res->next;
 #endif
     res->next = rdma_coro_none;
     res->coro_state = coro_state_invaild;
     res->resume_handler = nullptr;
     res->ctx = conn_id;
+#if CORO_DEBUG
+    res->location = location;
+    res->desc = desc;
+    res->start_time = std::chrono::steady_clock::now();
+#endif
     return res;
 }
 
 void rdma_worker::free_coro(rdma_coro *cor)
 {
     cor->ctx = 0;
-    cor->next = free_head;
+    cor->next = *free_head;
 #ifdef ALLOC_CORO_THREAD_SAFE
     while (!__atomic_compare_exchange_n(&free_head, &cor->next, cor->id, false, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
         ;
 #else
-    free_head = cor->id;
+    *free_head = cor->id;
 #endif
 }
+
+#if CORO_DEBUG
+void rdma_worker::print_running_coros()
+{
+    std::map<std::string, int> location_count;
+    auto now = std::chrono::steady_clock::now();
+
+    // 遍历协程并统计每种 file:line 的出现次数
+    for (uint16_t i = 0; i < max_coros; ++i)
+    {
+        // rdma_coro *cor = &coros[i];
+        rdma_coro *cor = &(*coros)[i]; // 使用 &(*coros)[index] 获取指针
+        if (cor->ctx != 0)
+        {
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cor->start_time).count();
+            if (elapsed >= 2)
+            {
+                log_err("Terminating long-running coro ID: %u, Context ID: %u, File: %s:%d, Elapsed Time: %ld s",
+                         cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed);
+                cor->coro_state |= (coro_state_error | coro_state_ready);
+                if (cor->coro_state & coro_state_inited)
+                    cor->resume_handler();
+            }
+            std::string location = std::string(cor->location.file_name()) + ":" + std::to_string(cor->location.line());
+            if (elapsed >= 2)
+            {
+                location_count[location]++;
+                log_err("Coro ID: %u, Context ID: %u, File: %s:%d, Desc: %s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), std::format("[{}:{}]segloc:{}第{}次SEND slot", cor->desc.cli_id, cor->desc.coro_id, cor->desc.segloc, cor->desc.send_cnt).c_str());
+            }
+        }
+    }
+
+    // 输出每种 file:line 的出现次数
+    // if (!location_count.empty())
+    // {
+    //     log_err("========== Start of print_running_coros ==========");
+    //     for (const auto &[location, count] : location_count)
+    //     {
+    //         log_err("File: %s, Count: %d" DEBUG_LOCATION_CALL_ARG.c_str(), count);
+    //     }
+    //     log_err("========== End of print_running_coros ==========");
+    // }
+}
+
+void rdma_worker::start_periodic_task()
+{
+    // log_err("开始定期打印协程信息");
+    periodic_thread = std::thread([this]()
+                                  {
+        while (!stop_flag.load()) {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            if (!stop_flag.load()) {
+                print_running_coros();
+            }
+        } });
+}
+
+void rdma_worker::stop_periodic_task()
+{
+    // log_err("停止定期打印协程信息");
+    stop_flag.store(true);
+    if (periodic_thread.joinable())
+    {
+        periodic_thread.join();
+    }
+}
+#endif
 
 task<> rdma_worker::cancel_coros(uint16_t conn_id, std::vector<int> &&cancel_list, volatile int &finish_flag)
 {
     for (auto e : cancel_list)
-        if (auto &&cor = coros[e]; cor.ctx == conn_id)
+        if (auto &&cor = (*coros)[e]; cor.ctx == conn_id)
         {
             cor.coro_state |= (coro_state_error | coro_state_ready);
             if (cor.coro_state & coro_state_inited)
@@ -465,26 +593,224 @@ void rdma_worker::worker_loop()
     struct doca_event event = {0};
     doca_error_t dma_workq_res;
 #endif
+    log_err("开始poll cq=%p", cq);
+    int opcode_count[512] = {0};
+
+    auto last_poll_time = std::chrono::steady_clock::now();
+    int last_seconds = 0;
     while (loop_flag)
     {
         assert_require((ready_num = ibv_poll_cq(cq, rdma_max_wc_per_poll, wcs)) >= 0);
+        // if (ready_num)
+        //     log_err("ibv_poll_cq ready_num: %d", ready_num);
+//         auto current_time = std::chrono::steady_clock::now();
+//         auto seconds = std::chrono::duration_cast<std::chrono::seconds>(current_time - last_poll_time).count();
+//         if (cur_seg_ptr_addr && *cur_seg_ptr_addr && seconds != last_seconds) {
+//             // log_err("CQ polling delta: %ld s", seconds);
+//             if (seconds == 5) {
+//                 log_err("卡住了，开始debug，输出CurSeg全部slots");
+//                 // 输出CurSegMeta->slot_cnt
+//                 CurSeg *cur_seg = (CurSeg *) *cur_seg_ptr_addr;
+// #if FAA_DETECT_FULL
+//                 log_err("CurSegMeta->slot_cnt: %d", cur_seg->seg_meta.slot_cnt);
+// #endif
+//                 for (int i = SLOT_PER_SEG - 1; i < SLOT_PER_SEG; i++)
+//                 {
+//                     Slot *slot = &cur_seg->slots[i];
+//                     // log_err("第%d个slot", i);
+//                     slot->print("第" + std::to_string(i) + "个slot");
+//                 }
+//             }
+//         }
+//         last_seconds = seconds;
+
         for (int i = 0; i < ready_num; ++i)
         {
+            last_poll_time = std::chrono::steady_clock::now();
             auto &&wc = wcs[i];
-            log_debug("polled %lu", wc.wr_id);
+#if !WRITE_WITH_IMM_SIGNAL && MODIFIED
+            if (wc.opcode == IBV_WC_RECV) {
+                // log_err("RECV opcode: %d, status: %d, byte_len: %d, qp_num: %d, src_qp: %d, pkey_index: %d, slid: %d, sl: %d, dlid_path_bits: %d", wc.opcode, wc.status, wc.byte_len, wc.qp_num, wc.src_qp, wc.pkey_index, wc.slid, wc.sl, wc.dlid_path_bits);
 
-            if(wc.wr_id == wr_wo_await){
+                int slot_index = 0;
+                CurSeg *cur_seg = cur_seg_ptr_addr ? (CurSeg *) *cur_seg_ptr_addr : nullptr;
+                uint8_t sign = *(((uint64_t *)cur_seg) + 1); // cur_seg->seg_meta.sign;
+#if !SEND_TO_CURSEG
+                CurSeg *temp_seg = temp_seg_ptr_addr ? (CurSeg *) *temp_seg_ptr_addr : nullptr;
+                Slot *tmp_slot = (Slot *) wc.wr_id;
+                slot_index = tmp_slot - temp_seg->slots;
+                // log_err("收到第%d个地址: %p, 长度: %lu, lkey: %lu", slot_index, tmp_slot, wc.byte_len, wc.slid);
+                // if (tmp_slot) tmp_slot->print();
+#else
+                // TODO: 可能需要去掉recv中的cor相关代码
+                Slot *cur_slot = (Slot *) wc.wr_id;
+                slot_index = cur_slot - cur_seg->slots;
+#endif
+                if (slot_index == SLOT_PER_SEG - 1) { // TODO: 改为使用signal conn接收切换CurSeg信号。FIXME: wr_id不能存地址，因为已经用于协程。
+                    // log_err("等待客户端合并一秒钟，再为CurSeg发布RECV");
+                    // sleep(1);
+                    while (*(((uint64_t *)cur_seg) + 1) == sign) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    }
+                    log_err("sign被反转，切换到下一个CurSeg");
+#if !SEND_TO_CURSEG
+                    // 对比两个CurSeg的slots是否相同
+                    for (int i = 0; i < SLOT_PER_SEG; i++) {
+                        Slot *temp_slot = &temp_seg->slots[i];
+                        Slot *cur_slot = &cur_seg->slots[i];
+                        // 用memcmp比较
+                        if (memcmp(temp_slot, cur_slot, sizeof(Slot)) != 0 && i != SLOT_PER_SEG - 1) {
+                            log_err("第%d个slot不相同", i); // 如果是112，CAS还在路上，sleep一会就能解决
+                            temp_slot->print();
+                            cur_slot->print();
+                        }
+                    }
+#endif
+
+                    for (int i = 0; i < SLOT_PER_SEG; i++) {
+#if SEND_TO_CURSEG
+                        Slot *slot = &cur_seg->slots[i];
+#else
+                        Slot *slot = &temp_seg->slots[i];
+#endif
+                        auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
+                        assert_check(sge);
+                        auto recv_wr = (ibv_recv_wr *)wr;
+                        fill_recv_wr(recv_wr, (ibv_sge *)sge, slot, sizeof(Slot), lkey());
+                        recv_wr->wr_id = (uint64_t) slot; // 64BIT，可以放地址 // FIXME: wr_id不能存地址，因为已经用于协程。不过此处直接ibv_post_recv，不需要协程。
+                        ibv_recv_wr *bad;
+                        if (srq) 
+                        {
+                            assert_check(0 == ibv_post_srq_recv(srq, recv_wr, &bad));
+                            // log_err("post第%d个slot，ptr: %p, srq: %p, len: %lu, lkey: %lu", i, recv_wr->sg_list->addr, srq, recv_wr->sg_list->length, recv_wr->sg_list->lkey);
+                        }
+                        free_buf(sge);
+                        // log_err("post第%d个slot，ptr: %p, len: %lu, lkey: %lu", i, recv_wr->sg_list->addr, recv_wr->sg_list->length, recv_wr->sg_list->lkey);
+                    }
+                }
+                continue;
+            }
+#endif
+            if (wc.opcode == IBV_WC_SEND) {
+                log_test("SEND完成, wr_id: %lu", wc.wr_id);
+            }
+            if (wc.opcode == IBV_WC_FETCH_ADD)
+            {
+                log_test("FETCH_ADD完成, wr_id: %lu", wc.wr_id);
+            }
+            // if (wc.opcode == IBV_WC_RDMA_READ) {
+            //     log_err("RDMA_READ完成, wr_id: %lu", wc.wr_id);
+            // }
+            // if (wc.opcode == IBV_WC_RECV)
+            // {
+            //     static int recv_count = 0;
+            //     log_err("接收到RECV count: %d, slot_idx: %d", recv_count, recv_count % SLOT_PER_SEG);
+            //     // if (recv_count % SLOT_PER_SEG == SLOT_PER_SEG - 1)
+            //     // {
+            //         CurSeg *cur_seg = cur_seg_ptr_addr ? (CurSeg *)*cur_seg_ptr_addr : nullptr;
+            //         Slot *slot = &cur_seg->slots[SLOT_PER_SEG - 1];
+            //         slot->print();
+
+            //     //     // 输出CurSegMeta->slot_cnt
+            //     //     log_err("CurSegMeta->slot_cnt: %d", cur_seg->seg_meta.slot_cnt);
+            //     // }
+            //     recv_count++;
+            // }
+            if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+                uint32_t segloc = ntohl(wc.imm_data);
+                std::bitset<32> segloc_bits(segloc);
+                bool split_ok = segloc_bits.test(31);
+                segloc_bits.reset(31);
+                segloc = segloc_bits.to_ulong();
+
+                // log_err("接收到RDMA_WITH_IMM, segloc: %lu, qp_num: %d", segloc, wc.qp_num);
+                CurSeg *cur_seg = reinterpret_cast<CurSeg *>(this->dir->segs[segloc].cur_seg_ptr);
+                // cur_seg->seg_meta.print("before:");
+#if RDMA_SIGNAL
+                if (segloc == SPLIT_OK || split_ok)
+                {
+                    log_test("接收到SPLIT_OK信号，准备创建新的SRQ，但不会马上post RECV, indice: %u", segloc);
+
+                    // cur_seg->seg_meta.print("before:");
+                    if (!cur_seg->seg_meta.srq)
+                    {
+                        // 创建新的SRQ
+                        assert_require(cur_seg->seg_meta.srq = dev.create_srq(rdma_default_cq_size));
+                        log_test("为segloc: %u创建新的SRQ: %p", segloc, cur_seg->seg_meta.srq);
+                        // cur_seg->seg_meta.print("after:");
+
+                        srqs.push_back(cur_seg->seg_meta.srq);
+                    }
+                    else log_test("使用之前的SRQ: %p", cur_seg->seg_meta.srq);
+                    // 分裂后不需要为new segment发布RECV，等待第一次连接时发布
+                    // 分裂后需要为old segment发布RECV，会额外发起一次write with imm
+                }
+                else
+                {
+                    // CurSeg *cur_seg = cur_seg_ptr_addr ? reinterpret_cast<CurSeg *>(*cur_seg_ptr_addr) : nullptr; // TODO: 根据segloc找到CurSeg
+                    // CurSeg *cur_seg = reinterpret_cast<CurSeg *>(this->dir->segs[segloc].cur_seg_ptr);
+#if WRITE_WITH_IMM_SIGNAL
+                    cur_seg->seg_meta.slot_cnt = 0; // CurSeg中的条目已经被清空，将slot_cnt置为0避免溢出
+                    for (int i = 0; i < SLOT_PER_SEG; i++)
+                    {
+#if SEND_TO_CURSEG
+                        Slot *slot = &cur_seg->slots[i];
+#else
+                        Slot *slot = &temp_seg->slots[i];
+#endif
+                        auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
+                        assert_check(sge);
+                        auto recv_wr = (ibv_recv_wr *)wr;
+                        fill_recv_wr(recv_wr, (ibv_sge *)sge, slot, sizeof(Slot), lkey());
+                        recv_wr->wr_id = wr_wo_await;
+                        ibv_recv_wr *bad;
+                        if (cur_seg->seg_meta.srq)
+                        {
+                            assert_check(0 == ibv_post_srq_recv(cur_seg->seg_meta.srq, recv_wr, &bad)); // TODO: conn发布
+                            // if (i == SLOT_PER_SEG - 1)
+                            //    log_err("IMM post第%d个slot，ptr: %p, srq: %p, len: %lu, lkey: %lu", i, recv_wr->sg_list->addr, srq, recv_wr->sg_list->length, recv_wr->sg_list->lkey);
+                        }
+                        free_buf(sge);
+                        // log_err("post第%d个slot，ptr: %p, len: %lu, lkey: %lu", i, recv_wr->sg_list->addr, recv_wr->sg_list->length, recv_wr->sg_list->lkey);
+                        // log_err("收到IMM,post第%d个slot的RECV到srq: %p", i, cur_seg->seg_meta.srq);
+                    }
+                    if (segloc)
+                        log_test("收到IMM，为segloc:%u,SRQ:%p发布%d个RECV, qp_num: %u", segloc, cur_seg->seg_meta.srq, SLOT_PER_SEG, wc.qp_num);
+#endif
+                }
+                auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
+                assert_check(sge);
+                auto recv_wr = (ibv_recv_wr *)wr;
+
+                Slot *slot = &cur_seg->slots[0];
+
+                fill_recv_wr(recv_wr, (ibv_sge *)sge, slot, 0, lkey()); // nullptr
+                recv_wr->wr_id = wr_wo_await;
+                ibv_recv_wr *bad;
+                if (signal_srq) {
+                    assert_check(0 == ibv_post_srq_recv(signal_srq, recv_wr, &bad));
+                    // log_err("收到IMM,为signal_srq发布RECV, ptr: %p, srq: %p, len: %lu, "
+                    //         "lkey: %lu",
+                    //         recv_wr->sg_list->addr, signal_srq,
+                    //         recv_wr->sg_list->length, recv_wr->sg_list->lkey);
+                }
+                free_buf(sge);
+#endif
+                continue;
+            }
+            if(wc.wr_id == wr_wo_await){ // 可以修改为>=，这样当>=wr_wo_await时，可以减去wr_wo_await，得到存储的数据
                 if (wc.status != IBV_WC_SUCCESS)
                 {
-                    log_warn("got bad completion with status: 0x%x, vendor syndrome: 0x%x", wc.status, wc.vendor_err);
+                    log_err("got bad completion with status: 0x%x, vendor syndrome: 0x%x", wc.status, wc.vendor_err);
                 }
                 continue;
             }
 
-            auto cor = coros + wc.wr_id;
+            // auto cor = coros + wc.wr_id;
+            rdma_coro *cor = &(*coros)[wc.wr_id]; // 使用 &(*coros)[index] 获取指针
             if (wc.status != IBV_WC_SUCCESS)
             {
-                log_warn("got bad completion with status: 0x%x, vendor syndrome: 0x%x", wc.status, wc.vendor_err);
+                log_err("got bad completion with status: 0x%x, vendor syndrome: 0x%x", wc.status, wc.vendor_err);
                 cor->coro_state |= coro_state_error;
             }
             if (cor->coro_state & coro_state_inited)
@@ -537,12 +863,21 @@ rdma_server::~rdma_server()
 {
     stop_serve();
 }
-
+// #if SEND_TO_CURSEG
 void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int worker_num, const ibv_qp_cap &qp_cap,
-                              int tempmp_size, int max_coros, int cq_size, int port)
+                              int tempmp_size, int max_coros, int cq_size, int port, Directory *dir)
+// #else
+// void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int worker_num, const ibv_qp_cap &qp_cap,
+//                               int tempmp_size, int max_coros, int cq_size, int port, uintptr_t* cur_seg_ptr_addr, uintptr_t* temp_seg_ptr_addr)
+// #endif
 {
+    // log_err("start_serve handler: %p, worker_num: %d, qp_cap: %p, tempmp_size: %d, max_coros: %d, cq_size: %d, port: %d", handler, worker_num, &qp_cap, tempmp_size, max_coros, cq_size, port);
     sockaddr_in local_addr;
     assert_require((listenfd = socket(AF_INET, SOCK_STREAM, 0)) != -1);
+
+    // if (cur_seg_ptr_addr && *cur_seg_ptr_addr) {
+    //     log_err("服务器提供了cur_seg_ptr: %lu", *cur_seg_ptr_addr);
+    // } else log_err("客户端没有提供cur_seg_ptr");
 
     // set socket reuse and nonblock
     {
@@ -561,7 +896,7 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
     assert_require(::bind(listenfd, (sockaddr *)&local_addr, sizeof(sockaddr)) != -1);
     assert_require(::listen(listenfd, 5) != -1);
 
-    if (handler)
+    if (handler) // client不调用start_serve，不会执行到这里
     {
         assert_require(worker_num >= 1);
         for (int i = 0; i < worker_num; ++i)
@@ -570,12 +905,18 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
             worker_threads.emplace_back(std::thread(&rdma_worker::worker_loop, workers[i]));
         }
     }
-    else
+    else // server
     {
         assert_require(worker_num == 1);
-        assert_require(qp_cap.max_send_wr == 0 && qp_cap.max_recv_wr == 0);
-        workers.emplace_back(new rdma_worker(dev, qp_cap, 0, 0, 1)); // cq only
-        worker_threads.emplace_back(std::thread());
+        // assert_require(qp_cap.max_send_wr == 0 && qp_cap.max_recv_wr == 0);
+        // workers.emplace_back(new rdma_worker(dev, qp_cap, 0, 0, 1));
+        auto worker = new rdma_worker(dev, sr_qp_cap, tempmp_size, max_coros, cq_size, dir); // 允许server recv
+#if TEST_SEND && !SEND_TO_CURSEG
+        worker->temp_seg_ptr_addr = temp_seg_ptr_addr;
+#endif
+        workers.emplace_back(worker);
+        // worker_threads.emplace_back(std::thread()); // 之前server不轮询cq
+        worker_threads.emplace_back(std::thread(&rdma_worker::worker_loop, workers[0])); // server只有一个worker，轮询它的cq
     }
 
     auto ser_loop = [this, handler, worker_num](const std::stop_token &st)
@@ -584,6 +925,8 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
         sock_select_list select_list(100);
         socklen_t addr_len = 0;
         sockaddr_in remote_addr;
+        std::map<uint64_t, bool> post_recv_flag_map;
+        bool post_signal_recv_flag = false;
 
         select_list.add(listenfd);
         while (!st.stop_requested())
@@ -603,10 +946,21 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                         assert_require(accepted_sock > 0);
                         select_list.add(accepted_sock);
                         log_info("accept conn: %d", accepted_sock);
+                        uint8_t is_signal_conn = 0;
+                        uint64_t segloc = 0;
+#if RDMA_SIGNAL
+                        // 接收 is_signal_conn 和 segloc
+                        assert_require(recv(accepted_sock, &is_signal_conn, sizeof(is_signal_conn), 0) == sizeof(is_signal_conn));
+                        assert_require(recv(accepted_sock, &segloc, sizeof(segloc), 0) == sizeof(segloc));
+                        log_test("socket接收到is_signal_conn: %d, segloc: %lu", is_signal_conn, segloc);
+#endif
                         auto worker = workers[accepted_sock % worker_num];
-                        auto conn = new rdma_conn(worker, accepted_sock);
+                        auto conn = new rdma_conn(worker, accepted_sock, is_signal_conn, segloc); // IMPORTANT: 服务器创建QP
                         assert_require(conn);
                         sk2conn[accepted_sock] = conn;
+#if RDMA_SIGNAL
+                        log_test("创建qp_num: %d, 使用signal_srq: %d, is_signal_conn: %d, segloc: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, is_signal_conn, segloc);
+#endif
                     }
                     else
                     {
@@ -625,9 +979,46 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                         {
                             switch (((__rdma_exchange_t *)recv_buf)->proto)
                             {
-                            case rdma_exchange_proto_setup:
-                                conn->handle_recv_setup(recv_buf, recv_len);
+                            case rdma_exchange_proto_setup: {
+                                uint8_t is_signal_conn = ((__rdma_exchange_t *)recv_buf)->is_signal_conn;
+                                uint64_t segloc = ((__rdma_exchange_t *)recv_buf)->segloc;
+                                conn->handle_recv_setup(recv_buf, recv_len, is_signal_conn, segloc);
+                                if (!is_signal_conn && !post_recv_flag_map[segloc])
+                                {
+                                    post_recv_flag_map[segloc] = true;
+#if SEND_TO_CURSEG
+                                    // CurSeg *seg = conn->worker->cur_seg_ptr_addr ? (CurSeg *) *(conn->worker->cur_seg_ptr_addr) : nullptr;
+                                    CurSeg *seg = reinterpret_cast<CurSeg *>(conn->worker->dir->segs[segloc].cur_seg_ptr);
+#else
+                                    CurSeg *seg = conn->worker->temp_seg_ptr_addr ? (CurSeg *) *(conn->worker->temp_seg_ptr_addr) : nullptr;
+#endif
+                                    for (int i = 0; i < SLOT_PER_SEG; i++)
+                                    {
+                                        // log_err("准备post第%d个recv, seg: %p, temp_slot: %p", i, seg, &seg->slots[i]);
+                                        // log_err("post第%d个slot到srq: %p", i, seg->seg_meta.srq);
+                                        Slot *temp_slot = &seg->slots[i];
+                                        conn->pure_recv(temp_slot, sizeof(Slot), conn->worker->lkey());
+                                    }
+#if RDMA_SIGNAL
+                                    log_test("第一次为普通SRQ发布%d个RECV, qp_num: "
+                                            "%d, srq: %p", SLOT_PER_SEG,
+                                            conn->qp->qp_num,
+                                            conn->qp->srq);
+#endif
+                                }
+#if RDMA_SIGNAL
+                                if (is_signal_conn && !post_signal_recv_flag)
+                                {
+                                    post_signal_recv_flag = true;
+                                    // CurSeg *seg = conn->worker->cur_seg_ptr_addr ? (CurSeg *) *(conn->worker->cur_seg_ptr_addr) : nullptr;
+                                    // Slot *temp_slot = &seg->slots[0];
+                                    for (int i = 0; i < SLOT_PER_SEG; i++)
+                                        conn->pure_recv(nullptr, 0, conn->worker->lkey());
+                                    log_err("第一次为signal_srq发布RECV, qp_num: %d, 使用signal_srq: %d", conn->qp->qp_num, conn->qp->srq == conn->worker->signal_srq);
+                                }
+#endif
                                 break;
+                            }
                             case rdma_exchange_proto_ready:
                                 if (handler)
                                     workers[sk % worker_num]->pending_tasks->enqueue(handler(conn));
@@ -664,7 +1055,7 @@ void rdma_server::stop_serve()
     listenfd = -1;
 }
 
-rdma_conn *rdma_worker::connect(const char *host, int port)
+rdma_conn *rdma_worker::connect(const char *host, int port, uint8_t is_signal_conn, uint64_t segloc)
 {
     uint8_t recv_buf[rdma_sock_recv_buf_size];
     int sock;
@@ -677,14 +1068,20 @@ rdma_conn *rdma_worker::connect(const char *host, int port)
     assert_require(-1 != ::connect(sock, (sockaddr *)&remote_addr, sizeof(sockaddr)));
     log_info("socket connected");
 
-    auto conn = new rdma_conn(this, sock);
+#if RDMA_SIGNAL
+    // 发送 is_signal_conn 和 segloc
+    assert_require(send(sock, &is_signal_conn, sizeof(is_signal_conn), 0) == sizeof(is_signal_conn));
+    assert_require(send(sock, &segloc, sizeof(segloc), 0) == sizeof(segloc));
+#endif
+
+    auto conn = new rdma_conn(this, sock, is_signal_conn, segloc); // IMPORTANT: 客户端创建QP
     if (!conn)
         log_err("failed to alloc conn");
     size_t recv_len = 0;
     while ((recv_len += recv(sock, recv_buf + recv_len, rdma_sock_recv_buf_size - recv_len, 0)) < sizeof(__rdma_exchange_t))
         ;
     log_info("RTR -> RTS");
-    conn->handle_recv_setup(recv_buf, recv_len);
+    conn->handle_recv_setup(recv_buf, recv_len, is_signal_conn, segloc);
     recv_len = 0;
     while ((recv_len += recv(sock, recv_buf + recv_len, rdma_sock_recv_buf_size - recv_len, 0)) < sizeof(uint16_t))
         ;
@@ -693,7 +1090,7 @@ rdma_conn *rdma_worker::connect(const char *host, int port)
     return conn;
 }
 
-rdma_conn::rdma_conn(rdma_worker *w, int _sock)
+rdma_conn::rdma_conn(rdma_worker *w, int _sock, uint8_t is_signal_conn, uint64_t segloc)
     : dev(w->dev), worker(w), sock(_sock), conn_id(dev.alloc_conn_id())
 {
     {
@@ -703,6 +1100,33 @@ rdma_conn::rdma_conn(rdma_worker *w, int _sock)
         qp_init_attr.sq_sig_all = 0;
         qp_init_attr.send_cq = worker->cq;
         qp_init_attr.recv_cq = worker->cq;
+
+        if (!segloc) // 此时worker->dir还没初始化
+        {
+            if (worker->srqs.size() > 0 && worker->srqs[0])
+            {
+                qp_init_attr.srq = worker->srqs[0];
+#if RDMA_SIGNAL
+                if (is_signal_conn)
+                    qp_init_attr.srq = worker->signal_srq;
+#endif
+            }
+        }
+        else
+        {
+            // assert_require(worker->dir); // server必须设置dir
+            if (worker->dir) {
+                CurSeg *cur_seg = reinterpret_cast<CurSeg *>(worker->dir->segs[segloc].cur_seg_ptr);
+                if (cur_seg->seg_meta.srq)
+                {
+                    qp_init_attr.srq = cur_seg->seg_meta.srq;
+#if RDMA_SIGNAL
+                    if (is_signal_conn)
+                        qp_init_attr.srq = worker->signal_srq;
+#endif
+                }
+            }
+        }
         qp_init_attr.cap = worker->qp_cap;
         assert_require(qp = ibv_create_qp(dev.pd, &qp_init_attr));
     }
@@ -712,7 +1136,7 @@ rdma_conn::rdma_conn(rdma_worker *w, int _sock)
     auto hdr = (rdma_infomr_hdr *)exchange_mr->addr;
     hdr->tail = 0;
 
-    send_exchange(rdma_exchange_proto_setup);
+    send_exchange(rdma_exchange_proto_setup, is_signal_conn, segloc);
     log_info("new conn %d", sock);
 }
 
@@ -735,8 +1159,7 @@ void rdma_conn::release_working_coros()
         return;
     std::vector<int> cancel_list;
     for (int i = 0; i < worker->max_coros; ++i)
-        if (worker->coros[i].ctx == conn_id)
-            cancel_list.push_back(i);
+        if ((*worker->coros)[i].ctx == conn_id) cancel_list.push_back(i);
     volatile int finish_flag = 0;
     if (worker->loop_flag) // WARNING: should not close conn during stopping work loop
         worker->pending_tasks->enqueue(worker->cancel_coros(conn_id, std::move(cancel_list), finish_flag));
@@ -746,11 +1169,14 @@ void rdma_conn::release_working_coros()
         ;
 }
 
-void rdma_conn::send_exchange(uint16_t proto)
+void rdma_conn::send_exchange(uint16_t proto, uint8_t is_signal_conn, uint64_t segloc)
 {
     __rdma_exchange_t exc;
     union ibv_gid local_gid;
     exc.proto = proto;
+    exc.is_signal_conn = is_signal_conn;
+    exc.segloc = segloc;
+    // log_err("send_exchange proto: %d, is_signal_conn: %d, segloc: %lu", proto, is_signal_conn, segloc);
     if (proto == rdma_exchange_proto_setup)
     {
         if (dev.gid_idx >= 0)
@@ -774,7 +1200,7 @@ void rdma_conn::send_exchange(uint16_t proto)
         assert_require(0);
 }
 
-void rdma_conn::handle_recv_setup(const void *buf, size_t len)
+void rdma_conn::handle_recv_setup(const void *buf, size_t len, uint8_t is_signal_conn, uint64_t segloc)
 {
     auto exc = (const __rdma_exchange_t *)buf;
     memset(exchange_wr, 0, sizeof(ibv_send_wr));
@@ -791,7 +1217,7 @@ void rdma_conn::handle_recv_setup(const void *buf, size_t len)
               modify_qp_to_rtr(exc->qp_num, exc->lid, &exc->gid) ||
               (worker->coros && modify_qp_to_rts())));
 
-    send_exchange(rdma_exchange_proto_ready);
+    send_exchange(rdma_exchange_proto_ready, is_signal_conn, segloc);
 }
 
 int rdma_conn::modify_qp_to_init()
@@ -996,24 +1422,34 @@ dma_future rdma_conn::dma_write(doca_mmap *rmmp, uint64_t raddr, doca_mmap *lmmp
 }
 #endif
 
-rdma_future rdma_conn::do_send(ibv_send_wr *wr_begin, ibv_send_wr *wr_end)
+rdma_future rdma_conn::do_send(ibv_send_wr *wr_begin, ibv_send_wr *wr_end DEBUG_LOCATION_DEFINE DEBUG_CORO_DEFINE)
 {
-    auto cor = worker->alloc_coro(conn_id);
+    auto cor = worker->alloc_coro(conn_id DEBUG_LOCATION_CALL_ARG DEBUG_CORO_CALL_ARG);
     assert_check(cor);
     wr_end->wr_id = cor->id;
     wr_end->send_flags |= IBV_SEND_SIGNALED;
+    // if (wr_end->opcode == IBV_WR_SEND) {
+    //     log_err("发送send请求，wr_id: %d", cor->id);
+    // } else if (wr_end->opcode == IBV_WR_RDMA_READ) {
+    //     log_err("发送read请求，wr_id: %d", cor->id);
+    // }
     ibv_send_wr *bad;
     assert_check(0 == ibv_post_send(qp, wr_begin, &bad));
     return rdma_future(cor, this);
 }
 
-rdma_future rdma_conn::do_recv(ibv_recv_wr *wr)
+rdma_future rdma_conn::do_recv(ibv_recv_wr *wr DEBUG_LOCATION_DEFINE)
 {
-    auto cor = worker->alloc_coro(conn_id);
+    auto cor = worker->alloc_coro(conn_id DEBUG_LOCATION_CALL_ARG);
     assert_check(cor);
-    wr->wr_id = cor->id;
+    wr->wr_id = cor->id; // wr_id不能存地址，因为已经用于协程。
     ibv_recv_wr *bad;
-    assert_check(0 == ibv_post_recv(qp, wr, &bad));
+    if (qp->srq) {
+        assert_check(0 == ibv_post_srq_recv(qp->srq, wr, &bad));
+    }
+    else {
+        assert_check(0 == ibv_post_recv(qp, wr, &bad));
+    }
     return rdma_future(cor, this);
 }
 
@@ -1060,17 +1496,17 @@ uint64_t rdma_faa_future::await_resume()
     return *(uint64_t *)_res_buf;
 }
 
-rdma_buffer_future rdma_conn::read(uint64_t raddr, uint32_t rkey, uint32_t len)
+rdma_buffer_future rdma_conn::read(uint64_t raddr, uint32_t rkey, uint32_t len DEBUG_LOCATION_DEFINE)
 {
     auto [buf, sge, wr] = alloc_many(len, sizeof(ibv_sge), sizeof(ibv_send_wr));
     assert_check(buf);
     auto send_wr = (ibv_send_wr *)wr;
     fill_rw_wr<IBV_WR_RDMA_READ>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, len, lkey());
-    auto fur = do_send(send_wr, send_wr);
+    auto fur = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
     return rdma_buffer_future(fur.cor, fur.conn, buf);
 }
 
-rdma_future rdma_conn::read(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey)
+rdma_future rdma_conn::read(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey DEBUG_LOCATION_DEFINE)
 {
     if(raddr==0){
         log_err("zero raddr");
@@ -1082,12 +1518,12 @@ rdma_future rdma_conn::read(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t
     assert_check(sge);
     auto send_wr = (ibv_send_wr *)wr;
     fill_rw_wr<IBV_WR_RDMA_READ>(send_wr, (ibv_sge *)sge, raddr, rkey, laddr, len, lkey);
-    auto res = do_send(send_wr, send_wr);
+    auto res = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
     free_buf(sge);
     return res;
 }
 
-rdma_future rdma_conn::write(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t _lkey)
+rdma_future rdma_conn::write(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t _lkey DEBUG_LOCATION_DEFINE)
 {
     if(raddr==0){
         log_err("zero raddr");
@@ -1101,7 +1537,7 @@ rdma_future rdma_conn::write(uint64_t raddr, uint32_t rkey, void *laddr, uint32_
     fill_rw_wr<IBV_WR_RDMA_WRITE>(send_wr, (ibv_sge *)sge, raddr, rkey, laddr, len, _lkey);
     if (_lkey == 0)
         send_wr->send_flags = IBV_SEND_INLINE;
-    auto res = do_send(send_wr, send_wr);
+    auto res = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
     free_buf(sge);
     
     //For Flush
@@ -1116,6 +1552,26 @@ rdma_future rdma_conn::write(uint64_t raddr, uint32_t rkey, void *laddr, uint32_
     //     send_wr->send_flags = IBV_SEND_INLINE;
     // auto res = do_send(send_wr, send_wr);
     // free_buf(sge);
+    return res;
+}
+
+rdma_future rdma_conn::write_with_imm(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t _lkey, uint32_t imm_data DEBUG_LOCATION_DEFINE)
+{
+    if (raddr == 0)
+    {
+        log_err("zero raddr");
+        int *ptr = NULL;
+        *ptr = 10; // 引发段错误
+    }
+    auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_send_wr));
+    assert_check(sge);
+    auto send_wr = (ibv_send_wr *)wr;
+    fill_rw_wr<IBV_WR_RDMA_WRITE_WITH_IMM>(send_wr, (ibv_sge *)sge, raddr, rkey, laddr, len, _lkey);
+    send_wr->imm_data = htonl(imm_data); // 设置 Immediate 数据
+    if (_lkey == 0)
+        send_wr->send_flags = IBV_SEND_INLINE;
+    auto res = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
+    free_buf(sge);
     return res;
 }
 
@@ -1144,60 +1600,7 @@ void rdma_conn::pure_write(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t 
     free_buf(sge);
 }
 
-// rdma_cas_future rdma_conn::fetch_add(uint64_t raddr, uint32_t rkey, uint64_t &cmpval, uint64_t swapval)
-rdma_cas_future rdma_conn::fetch_add(uint64_t raddr, uint32_t rkey, uint64_t &fetch, uint64_t addval)
-{
-    auto [buf, sge, wr] = alloc_many(sizeof(uint64_t), sizeof(ibv_sge), sizeof(ibv_send_wr));
-    assert_check(buf);
-    auto send_wr = (ibv_send_wr *)wr;
-    fill_atomic_wr<IBV_WR_ATOMIC_FETCH_AND_ADD>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, lkey(), addval, 0);
-    auto fur = do_send(send_wr, send_wr);
-    return rdma_cas_future(fur.cor, fur.conn, buf, fetch);
-}
-
-rdma_cas_future rdma_conn::cas(uint64_t raddr, uint32_t rkey, uint64_t &cmpval, uint64_t swapval)
-{
-    if(raddr==0){
-        log_err("zero raddr");
-        // exit(-1);
-        int* ptr = NULL;
-        *ptr = 10; // 在这里引发段错误
-    }
-    auto [buf, sge, wr] = alloc_many(sizeof(uint64_t), sizeof(ibv_sge), sizeof(ibv_send_wr));
-    assert_check(buf);
-    auto send_wr = (ibv_send_wr *)wr;
-    fill_atomic_wr<IBV_WR_ATOMIC_CMP_AND_SWP>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, lkey(), cmpval, swapval);
-    auto fur = do_send(send_wr, send_wr);
-    return rdma_cas_future(fur.cor, fur.conn, buf, cmpval);
-}
-
-rdma_cas_n_future rdma_conn::cas_n(uint64_t raddr, uint32_t rkey, uint64_t cmpval, uint64_t swapval)
-{
-    if(raddr==0){
-        log_err("zero raddr");
-        // exit(-1);
-        int* ptr = NULL;
-        *ptr = 10; // 在这里引发段错误
-    }
-    auto [buf, sge, wr] = alloc_many(sizeof(uint64_t), sizeof(ibv_sge), sizeof(ibv_send_wr));
-    assert_check(buf);
-    auto send_wr = (ibv_send_wr *)wr;
-    fill_atomic_wr<IBV_WR_ATOMIC_CMP_AND_SWP>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, lkey(), cmpval, swapval);
-    auto fur = do_send(send_wr, send_wr);
-    return rdma_cas_n_future(fur.cor, fur.conn, buf, cmpval);
-}
-
-rdma_faa_future rdma_conn::faa(uint64_t raddr, uint32_t rkey, uint64_t addval)
-{
-    auto [buf, sge, wr] = alloc_many(sizeof(uint64_t), sizeof(ibv_sge), sizeof(ibv_send_wr));
-    assert_check(buf);
-    auto send_wr = (ibv_send_wr *)wr;
-    fill_atomic_wr<IBV_WR_ATOMIC_FETCH_AND_ADD>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, lkey(), addval, 0);
-    auto fur = do_send(send_wr, send_wr);
-    return rdma_faa_future(fur.cor, fur.conn, buf);
-}
-
-rdma_future rdma_conn::send(void *laddr, uint32_t len, uint32_t _lkey)
+void rdma_conn::pure_send(void *laddr, uint32_t len, uint32_t _lkey)
 {
     auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_send_wr));
     assert_check(sge);
@@ -1205,33 +1608,200 @@ rdma_future rdma_conn::send(void *laddr, uint32_t len, uint32_t _lkey)
     fill_rw_wr<IBV_WR_SEND>(send_wr, (ibv_sge *)sge, 0, 0, laddr, len, _lkey);
     if (_lkey == 0)
         send_wr->send_flags = IBV_SEND_INLINE;
-    auto res = do_send(send_wr, send_wr);
+    send_wr->wr_id = wr_wo_await;
+    send_wr->send_flags |= IBV_SEND_SIGNALED;
+    ibv_send_wr *bad;
+    assert_check(0 == ibv_post_send(qp, send_wr, &bad));
     free_buf(sge);
-    return res;
 }
 
-rdma_buffer_future rdma_conn::recv(uint32_t len)
+void rdma_conn::pure_read(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t _lkey)
 {
-    auto [buf, sge, wr] = alloc_many(len, sizeof(ibv_sge), sizeof(ibv_recv_wr));
-    assert_check(buf);
-    auto recv_wr = (ibv_recv_wr *)wr;
-    fill_recv_wr(recv_wr, (ibv_sge *)sge, buf, len, lkey());
-    auto fur = do_recv(recv_wr);
-    return rdma_buffer_future(fur.cor, fur.conn, buf);
+    auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_send_wr));
+    assert_check(sge);
+    auto send_wr = (ibv_send_wr *)wr;
+    fill_rw_wr<IBV_WR_RDMA_READ>(send_wr, (ibv_sge *)sge, raddr, rkey, laddr, len, _lkey);
+    send_wr->wr_id = wr_wo_await;
+    send_wr->send_flags |= IBV_SEND_SIGNALED;
+    ibv_send_wr *bad;
+    assert_check(0 == ibv_post_send(qp, send_wr, &bad));
+    free_buf(sge);
 }
 
-rdma_future rdma_conn::recv(void *laddr, uint32_t len, uint32_t lkey)
+void rdma_conn::pure_recv(void *laddr, uint32_t len, uint32_t lkey)
 {
     auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
     assert_check(sge);
     auto recv_wr = (ibv_recv_wr *)wr;
     fill_recv_wr(recv_wr, (ibv_sge *)sge, laddr, len, lkey);
-    auto fur = do_recv(recv_wr);
+    recv_wr->wr_id = wr_wo_await;
+    ibv_recv_wr *bad;
+    if (qp->srq) {
+        assert_check(0 == ibv_post_srq_recv(qp->srq, recv_wr, &bad));
+    }
+    else {
+        assert_check(0 == ibv_post_recv(qp, recv_wr, &bad));
+    }
+    free_buf(sge);
+}
+
+// rdma_cas_future rdma_conn::fetch_add(uint64_t raddr, uint32_t rkey, uint64_t &cmpval, uint64_t swapval)
+rdma_cas_future rdma_conn::fetch_add(uint64_t raddr, uint32_t rkey, uint64_t &fetch, uint64_t addval DEBUG_LOCATION_DEFINE)
+{
+    auto [buf, sge, wr] = alloc_many(sizeof(uint64_t), sizeof(ibv_sge), sizeof(ibv_send_wr));
+    assert_check(buf);
+    auto send_wr = (ibv_send_wr *)wr;
+    fill_atomic_wr<IBV_WR_ATOMIC_FETCH_AND_ADD>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, lkey(), addval, 0);
+    auto fur = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
+    return rdma_cas_future(fur.cor, fur.conn, buf, fetch);
+}
+
+rdma_cas_future rdma_conn::cas(uint64_t raddr, uint32_t rkey, uint64_t &cmpval, uint64_t swapval DEBUG_LOCATION_DEFINE)
+{
+    if(raddr==0){
+        log_err("zero raddr");
+        // exit(-1);
+        int* ptr = NULL;
+        *ptr = 10; // 在这里引发段错误
+    }
+    auto [buf, sge, wr] = alloc_many(sizeof(uint64_t), sizeof(ibv_sge), sizeof(ibv_send_wr));
+    assert_check(buf);
+    auto send_wr = (ibv_send_wr *)wr;
+    fill_atomic_wr<IBV_WR_ATOMIC_CMP_AND_SWP>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, lkey(), cmpval, swapval);
+    auto fur = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
+    return rdma_cas_future(fur.cor, fur.conn, buf, cmpval);
+}
+
+rdma_cas_n_future rdma_conn::cas_n(uint64_t raddr, uint32_t rkey, uint64_t cmpval, uint64_t swapval DEBUG_LOCATION_DEFINE)
+{
+    if(raddr==0){
+        log_err("zero raddr");
+        // exit(-1);
+        int* ptr = NULL;
+        *ptr = 10; // 在这里引发段错误
+    }
+    auto [buf, sge, wr] = alloc_many(sizeof(uint64_t), sizeof(ibv_sge), sizeof(ibv_send_wr));
+    assert_check(buf);
+    auto send_wr = (ibv_send_wr *)wr;
+    fill_atomic_wr<IBV_WR_ATOMIC_CMP_AND_SWP>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, lkey(), cmpval, swapval);
+    auto fur = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
+    return rdma_cas_n_future(fur.cor, fur.conn, buf, cmpval);
+}
+
+rdma_faa_future rdma_conn::faa(uint64_t raddr, uint32_t rkey, uint64_t addval DEBUG_LOCATION_DEFINE)
+{
+    auto [buf, sge, wr] = alloc_many(sizeof(uint64_t), sizeof(ibv_sge), sizeof(ibv_send_wr));
+    assert_check(buf);
+    auto send_wr = (ibv_send_wr *)wr;
+    fill_atomic_wr<IBV_WR_ATOMIC_FETCH_AND_ADD>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, lkey(), addval, 0);
+    auto fur = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
+    return rdma_faa_future(fur.cor, fur.conn, buf);
+}
+
+rdma_future rdma_conn::send(void *laddr, uint32_t len, uint32_t _lkey DEBUG_LOCATION_DEFINE DEBUG_CORO_DEFINE)
+{
+    auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_send_wr));
+    assert_check(sge);
+    auto send_wr = (ibv_send_wr *)wr;
+    fill_rw_wr<IBV_WR_SEND>(send_wr, (ibv_sge *)sge, 0, 0, laddr, len, _lkey);
+    if (_lkey == 0)
+        send_wr->send_flags = IBV_SEND_INLINE;
+    auto res = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG DEBUG_CORO_CALL_ARG);
+    free_buf(sge);
+    return res;
+}
+
+rdma_future rdma_conn::send_then_read(void *send_laddr, uint32_t send_len, uint32_t send_lkey, uint64_t read_raddr, uint32_t read_rkey, void *read_laddr, uint32_t read_len, uint32_t read_lkey DEBUG_LOCATION_DEFINE)
+{
+    // 分配多个 SGE 和 WR，用于 send 和 read 操作
+    auto [sge_send, sge_read, wr_send, wr_read] = alloc_many(sizeof(ibv_sge), sizeof(ibv_sge),
+                                                             sizeof(ibv_send_wr), sizeof(ibv_send_wr));
+    assert_check(sge_send && sge_read && wr_send && wr_read);
+
+    // 填充 send 的 WR
+    auto send_wr = (ibv_send_wr *)wr_send;
+    fill_rw_wr<IBV_WR_SEND>(send_wr, (ibv_sge *)sge_send, 0, 0, send_laddr, send_len, send_lkey);
+    if (send_lkey == 0)
+        send_wr->send_flags = IBV_SEND_INLINE;
+
+    // 填充 read 的 WR
+    auto read_wr = (ibv_send_wr *)wr_read;
+    fill_rw_wr<IBV_WR_RDMA_READ>(read_wr, (ibv_sge *)sge_read, read_raddr, read_rkey, read_laddr, read_len, read_lkey);
+
+    // 使用 IBV_SEND_FENCE 确保 send 完成后再执行 read
+    send_wr->send_flags |= IBV_SEND_FENCE;
+
+    // 将 send_wr 的 next 指针指向 read_wr，形成链表
+    send_wr->next = read_wr;
+    read_wr->next = nullptr;
+
+    // 发起 send 和 read 操作，使用 doorbell batching
+    auto res = do_send(send_wr, read_wr DEBUG_LOCATION_CALL_ARG);
+
+    // 释放分配的内存
+    free_buf(sge_send);
+    free_buf(sge_read);
+
+    return res;
+}
+
+rdma_future rdma_conn::send_then_fetch_add(void *send_laddr, uint32_t send_len, uint32_t send_lkey, uint64_t faa_raddr, uint32_t faa_rkey, uint64_t &faa_fetch, uint64_t faa_addval DEBUG_LOCATION_DEFINE)
+{
+    // 分配多个 SGE 和 WR，用于 send 和 fetch_add 操作
+    auto [sge_send, sge_faa, wr_send, wr_faa, buf_faa] = alloc_many(sizeof(ibv_sge), sizeof(ibv_sge),
+                                                                    sizeof(ibv_send_wr), sizeof(ibv_send_wr), sizeof(uint64_t));
+    assert_check(sge_send && sge_faa && wr_send && wr_faa && buf_faa);
+
+    // 填充 send 的 WR
+    auto send_wr = (ibv_send_wr *)wr_send;
+    fill_rw_wr<IBV_WR_SEND>(send_wr, (ibv_sge *)sge_send, 0, 0, send_laddr, send_len, send_lkey);
+    if (send_lkey == 0)
+        send_wr->send_flags = IBV_SEND_INLINE;
+
+    // 填充 fetch_add 的 WR
+    auto faa_wr = (ibv_send_wr *)wr_faa;
+    fill_atomic_wr<IBV_WR_ATOMIC_FETCH_AND_ADD>(faa_wr, (ibv_sge *)sge_faa, faa_raddr, faa_rkey, buf_faa, lkey(), faa_addval, 0);
+
+    // 使用 IBV_SEND_FENCE 确保 send 完成后再执行 fetch_add
+    // send_wr->send_flags |= IBV_SEND_FENCE;
+
+    // 将 send_wr 的 next 指针指向 faa_wr，形成链表
+    send_wr->next = faa_wr;
+    faa_wr->next = nullptr;
+
+    // 发起 send 和 fetch_add 操作，使用 doorbell batching
+    auto res = do_send(send_wr, faa_wr DEBUG_LOCATION_CALL_ARG);
+
+    // 释放分配的内存
+    free_buf(sge_send);
+    free_buf(sge_faa);
+
+    // return res;
+    return rdma_cas_future(res.cor, res.conn, buf_faa, faa_fetch);
+}
+
+rdma_buffer_future rdma_conn::recv(uint32_t len DEBUG_LOCATION_DEFINE)
+{
+    auto [buf, sge, wr] = alloc_many(len, sizeof(ibv_sge), sizeof(ibv_recv_wr));
+    assert_check(buf);
+    auto recv_wr = (ibv_recv_wr *)wr;
+    fill_recv_wr(recv_wr, (ibv_sge *)sge, buf, len, lkey());
+    auto fur = do_recv(recv_wr DEBUG_LOCATION_CALL_ARG);
+    return rdma_buffer_future(fur.cor, fur.conn, buf);
+}
+
+rdma_future rdma_conn::recv(void *laddr, uint32_t len, uint32_t lkey DEBUG_LOCATION_DEFINE)
+{
+    auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
+    assert_check(sge);
+    auto recv_wr = (ibv_recv_wr *)wr;
+    fill_recv_wr(recv_wr, (ibv_sge *)sge, laddr, len, lkey);
+    auto fur = do_recv(recv_wr DEBUG_LOCATION_CALL_ARG);
     free_buf(sge);
     return fur;
 }
 
-task<uint32_t> rdma_conn::fill(uint64_t raddr, uint32_t rkey, uint32_t rlen, void *fill_val, uint32_t fill_val_len, uint32_t work_buf_size)
+task<uint32_t> rdma_conn::fill(uint64_t raddr, uint32_t rkey, uint32_t rlen, void *fill_val, uint32_t fill_val_len, uint32_t work_buf_size DEBUG_LOCATION_DEFINE)
 {
     assert_check(is_times_ofN(work_buf_size, fill_val_len));
     auto [buf, sge, wr] = alloc_many(work_buf_size, sizeof(ibv_sge), sizeof(ibv_send_wr));
@@ -1248,7 +1818,7 @@ task<uint32_t> rdma_conn::fill(uint64_t raddr, uint32_t rkey, uint32_t rlen, voi
     filled = 0;
     for (; filled + work_buf_size <= rlen;)
     {
-        if (!co_await do_send(send_wr, send_wr))
+        if (!co_await do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG))
             co_return filled;
         send_wr->wr.rdma.remote_addr += work_buf_size;
         filled += work_buf_size;
@@ -1256,7 +1826,7 @@ task<uint32_t> rdma_conn::fill(uint64_t raddr, uint32_t rkey, uint32_t rlen, voi
     if (filled < rlen)
     {
         send_wr->sg_list->length = rlen - filled;
-        if (!co_await do_send(send_wr, send_wr))
+        if (!co_await do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG))
             co_return filled;
         filled = rlen;
     }

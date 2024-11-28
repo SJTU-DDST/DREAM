@@ -17,7 +17,7 @@
 #include <set>
 #include <stdint.h>
 #define ORDERED_INSERT
-#define ALLOW_KEY_OVERLAP
+// #define ALLOW_KEY_OVERLAP
 Config config;
 uint64_t load_num;
 using ClientType = SEPHASH::Client;
@@ -92,7 +92,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         if (op_frac < config.insert_frac)
         {
             #ifdef ALLOW_KEY_OVERLAP
-            tmp_key = GenKey(gen->operator()(key_chooser()));
+            tmp_key = GenKey(load_num + gen->operator()(key_chooser()));
             #else
             tmp_key = GenKey(
                 load_num +
@@ -172,6 +172,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
             // }
         }
     }
+    // log_err("cli_id:%lu coro_id:%lu run done, 等待stop", cli_id, coro_id);
     co_await cli->stop();
     co_return;
 }
@@ -183,8 +184,8 @@ int main(int argc, char *argv[])
     if (config.is_server)
     {
         ServerType ser(config);
-        while (true)
-            ;
+        // while (true)
+        //     ;
     }
     else
     {
@@ -200,21 +201,33 @@ int main(int argc, char *argv[])
         std::mutex dir_lock;
         std::vector<BasicDB *> clis;
         std::thread ths[80];
-
+#if RDMA_SIGNAL
+        rdma_conn *rdma_signal_conn = nullptr;
+#endif
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
+            // log_err("创建第%lu个client, tempmp_size:%lu, max_coro:%lu, cq_size:%lu", i, rdma_default_tempmp_size, config.max_coro, config.cq_size);
             rdma_clis[i] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[i] = rdma_clis[i]->connect(config.server_ip);
+            rdma_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
             assert(rdma_conns[i] != nullptr);
-            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip);
+            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
             assert(rdma_wowait_conns[i] != nullptr);
+#if RDMA_SIGNAL
+            rdma_signal_conn = rdma_clis[0]->connect(config.server_ip.c_str(), rdma_default_port, 1);
+            assert(rdma_signal_conn != nullptr);
+#endif
             for (uint64_t j = 0; j < config.num_coro; j++)
             {
                 lmrs[i * config.num_coro + j] =
                     dev.create_mr(cbuf_size, mem_buf + cbuf_size * (i * config.num_coro + j));
                 BasicDB *cli;
+#if RDMA_SIGNAL
+                cli = new ClientType(config, lmrs[i * config.num_coro + j], rdma_clis[i], rdma_conns[i],
+                                     rdma_wowait_conns[i], rdma_signal_conn, config.machine_id, i, j);
+#else
                 cli = new ClientType(config, lmrs[i * config.num_coro + j], rdma_clis[i], rdma_conns[i],
                                      rdma_wowait_conns[i], config.machine_id, i, j);
+#endif
                 clis.push_back(cli);
             }
         }
@@ -271,7 +284,7 @@ int main(int argc, char *argv[])
 
         printf("Run start\n");
         #ifdef ALLOW_KEY_OVERLAP
-        auto op_per_coro = config.num_op;
+        auto op_per_coro = config.num_op; // load_num for update
         #else
         auto op_per_coro = config.num_op / (config.num_machine * config.num_cli * config.num_coro);
         #endif
@@ -375,5 +388,8 @@ int main(int argc, char *argv[])
             delete rdma_conns[i];
             delete rdma_clis[i];
         }
+#if RDMA_SIGNAL
+        delete rdma_signal_conn;
+#endif
     }
 }

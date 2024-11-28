@@ -23,48 +23,52 @@ constexpr uint64_t SEGMENT_SIZE = 1024;
 constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t)+sizeof(uint8_t)));
 constexpr uint64_t SLOT_BATCH_SIZE = 8;
 constexpr uint64_t RETRY_LIMIT = (SLOT_PER_SEG/SLOT_BATCH_SIZE); // TODO : 后期试试改成其他较小的值
+#if LARGE_MAIN_SEG
+constexpr uint64_t MAX_MAIN_SIZE = 640000 * SLOT_PER_SEG; // IMPORTANT: 现在main seg不能分裂
+#else
 constexpr uint64_t MAX_MAIN_SIZE = 64 * SLOT_PER_SEG;
-constexpr uint64_t MAX_FP_INFO = 256;
-constexpr uint64_t INIT_DEPTH = 4;
-constexpr uint64_t MAX_DEPTH = 16;
-constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
+#endif
+// constexpr uint64_t MAX_FP_INFO = 256;
+constexpr uint64_t INIT_DEPTH = 0; // 4; IMPORTANT: 现在只有1个segment
+// constexpr uint64_t MAX_DEPTH = 16;
+// constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
 constexpr uint64_t ALIGNED_SIZE = 64;             // aligned size of len bitfield in DepSlot
 constexpr uint64_t dev_mem_size = (1 << 10) * 64; // 64KB的dev mem，用作lock
 constexpr uint64_t num_lock =
     (dev_mem_size - sizeof(uint64_t)) / sizeof(uint64_t); // Lock数量，client对seg_id使用hash来共享lock
 
-struct Slot
-{
-    uint8_t fp : 8;
-    uint8_t len : 3;
-    uint8_t sign : 1; // 用来表示split delete信息
-    uint8_t dep : 4;
-    uint64_t offset : 48;
-    uint8_t fp_2;
-    operator uint64_t()
-    {
-        return *(uint64_t *)this;
-    }
-    Slot(uint64_t u)
-    {
-        *this = *(Slot *)(&u);
-    }
-    bool operator<(const Slot &a) const
-    {
-        return fp < a.fp;
-    }
-    void print(uint64_t slot_id = -1)
-    {
-        if(slot_id!=-1) printf("slot_id:%lu\t", slot_id);
-        printf("fp:%x\t", fp);
-        printf("fp_2:%x\t", fp_2);
-        printf("len:%d\t", len);
-        printf("sign:%d\t", sign);
-        printf("dep:%d\t", dep);
-        printf("offset:%lx\t", offset);
-        printf("size:%ld\n", sizeof(Slot));
-    }
-}__attribute__((aligned(1)));
+// struct Slot
+// {
+//     uint8_t fp : 8;
+//     uint8_t len : 3;
+//     uint8_t sign : 1; // 用来表示split delete信息
+//     uint8_t dep : 4;
+//     uint64_t offset : 48;
+//     uint8_t fp_2;
+//     operator uint64_t()
+//     {
+//         return *(uint64_t *)this;
+//     }
+//     Slot(uint64_t u)
+//     {
+//         *this = *(Slot *)(&u);
+//     }
+//     bool operator<(const Slot &a) const
+//     {
+//         return fp < a.fp;
+//     }
+//     void print(uint64_t slot_id = -1)
+//     {
+//         if(slot_id!=-1) printf("slot_id:%lu\t", slot_id);
+//         printf("fp:%x\t", fp);
+//         printf("fp_2:%x\t", fp_2);
+//         printf("len:%d\t", len);
+//         printf("sign:%d\t", sign);
+//         printf("dep:%d\t", dep);
+//         printf("offset:%lx\t", offset);
+//         printf("size:%ld\n", sizeof(Slot));
+//     }
+// }__attribute__((aligned(1)));
 
 struct Slice
 {
@@ -115,62 +119,69 @@ KVBlock *InitKVBlock(Slice *key, Slice *value, Alloc *alloc)
     return kv_block;
 }
 
-struct CurSegMeta{
-    uint8_t sign : 1; // 实际中的split_lock可以和sign、depth合并，这里为了不降rdma驱动版本就没有合并。
-    uint64_t local_depth : 63;
-    uintptr_t main_seg_ptr;
-    uintptr_t main_seg_len;
-    uint64_t fp_bitmap[16]; // 16*64 = 1024,代表10bits fp的出现情况；整个CurSeg大约会出现（1024/8=128）个FP，因此能极大的减少search对CurSeg的访问
-}__attribute__((aligned(1)));
+// struct CurSegMeta{
+//     uint8_t sign : 1; // 实际中的split_lock可以和sign、depth合并，这里为了不降rdma驱动版本就没有合并。
+//     uint64_t local_depth : 63;
+//     uintptr_t main_seg_ptr;
+//     uintptr_t main_seg_len;
+//     uint64_t fp_bitmap[16]; // 16*64 = 1024,代表10bits fp的出现情况；整个CurSeg大约会出现（1024/8=128）个FP，因此能极大的减少search对CurSeg的访问
+// }__attribute__((aligned(1)));
 
-struct CurSeg
-{
-    uint64_t split_lock;
-    CurSegMeta seg_meta;
-    Slot slots[SLOT_PER_SEG];
-}__attribute__((aligned(1)));
+// struct CurSeg
+// {
+//     uint64_t split_lock;
+//     CurSegMeta seg_meta;
+//     Slot slots[SLOT_PER_SEG];
+// }__attribute__((aligned(1)));
 
 struct MainSeg
 {
     Slot slots[0];
 }__attribute__((aligned(1)));
 
-struct FpInfo{ 
-    uint8_t num; // 数量 
-    operator uint64_t()
-    {
-        return *(uint64_t *)this;
-    }
-}__attribute__((aligned(1)));
+// struct FpInfo{ 
+//     uint8_t num; // 数量 
+//     operator uint64_t()
+//     {
+//         return *(uint64_t *)this;
+//     }
+// }__attribute__((aligned(1)));
 
-struct DirEntry
-{
-    // TODO : 实际上只需要用5 bits，为了方便ptr统一48，所以这里仍保留16bits
-    uint64_t local_depth ; 
-    uintptr_t cur_seg_ptr ;
-    uintptr_t main_seg_ptr ;
-    uint64_t main_seg_len ;
-    FpInfo fp[MAX_FP_INFO];
-    bool operator==(const DirEntry &other) const
-    {
-        return cur_seg_ptr == other.cur_seg_ptr && main_seg_ptr == other.main_seg_ptr &&
-               main_seg_len == other.main_seg_len;
-    }
-} __attribute__((aligned(1)));
+// struct DirEntry
+// {
+//     // TODO : 实际上只需要用5 bits，为了方便ptr统一48，所以这里仍保留16bits
+//     uint64_t local_depth ; 
+//     uintptr_t cur_seg_ptr ;
+// #if !SEND_TO_CURSEG
+//     uintptr_t temp_seg_ptr ;
+// #endif
+//     uintptr_t main_seg_ptr ;
+//     uint64_t main_seg_len ;
+//     FpInfo fp[MAX_FP_INFO];
+//     bool operator==(const DirEntry &other) const
+//     {
+//         return cur_seg_ptr == other.cur_seg_ptr && main_seg_ptr == other.main_seg_ptr &&
+//                main_seg_len == other.main_seg_len;
+//     }
 
-struct Directory
-{
-    uint64_t global_depth;   // number of segment
-    DirEntry segs[DIR_SIZE]; // Directory use MSB and is allocated enough space in advance.
-    uint64_t start_cnt;      // 为多客户端同步保留的字段，不影响原有空间布局
+//     void print(std::string desc = ""){
+//         log_err("%s local_depth:%lu cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_lne:%lx",desc.c_str(),local_depth,cur_seg_ptr,main_seg_ptr,main_seg_len);
+//     }
+// } __attribute__((aligned(1)));
 
-    void print(){
-        log_err("Global_Depth:%lu",global_depth);
-        for(uint64_t i = 0 ; i < (1<<global_depth) ; i++){
-            log_err("Entry %lx : local_depth:%lu cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_lne:%lx",i,segs[i].local_depth,segs[i].cur_seg_ptr,segs[i].main_seg_ptr,segs[i].main_seg_len);
-        }
-    }
-} __attribute__((aligned(1)));
+// struct Directory
+// {
+//     uint64_t global_depth;   // number of segment
+//     DirEntry segs[DIR_SIZE]; // Directory use MSB and is allocated enough space in advance.
+//     uint64_t start_cnt;      // 为多客户端同步保留的字段，不影响原有空间布局
+
+//     void print(std::string desc = ""){
+//         log_err("%s Global_Depth:%lu", desc.c_str(), global_depth);
+//         for(uint64_t i = 0 ; i < (1<<global_depth) ; i++){
+//             log_err("Entry %lx : local_depth:%lu cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_lne:%lx",i,segs[i].local_depth,segs[i].cur_seg_ptr,segs[i].main_seg_ptr,segs[i].main_seg_len);
+//         }
+//     }
+// } __attribute__((aligned(1)));
 
 struct SlotOffset
 {
@@ -184,8 +195,13 @@ struct SlotOffset
 class Client : public BasicDB
 {
   public:
+#if RDMA_SIGNAL
+    Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn, rdma_conn *_signal_conn,
+           uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id);
+#else
     Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn,
            uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id);
+#endif
 
     Client(const Client &) = delete;
 
@@ -203,6 +219,8 @@ class Client : public BasicDB
     task<> remove(Slice *key);
 
   private:
+    Config &config;
+
     task<> sync_dir();
     task<uintptr_t> check_gd(uint64_t segloc,bool read_fp);
 
@@ -212,9 +230,14 @@ class Client : public BasicDB
     task<> print_main_seg(uint64_t seg_loc,uintptr_t main_seg_ptr, uint64_t main_seg_len);
 
     // rdma structs
-    rdma_client *cli;
-    rdma_conn *conn;
+    // rdma_client *cli;
+    std::vector<rdma_client *> clis{nullptr}; // clis[0]是初始化时外部传进来的cli，其他的是在get_conn中动态创建的
+    // rdma_conn *conn;
+    std::vector<rdma_conn *> conns{nullptr}; // conns[0]是初始化时外部传进来的conn，其他的是在get_conn中动态创建的
     rdma_conn *wo_wait_conn;
+#if RDMA_SIGNAL
+    rdma_conn *signal_conn;
+#endif
     rdma_rmr seg_rmr;
     struct ibv_mr *lmr;
 
@@ -234,12 +257,15 @@ class Client : public BasicDB
     SumCost sum_cost;
     uint64_t op_cnt;
     uint64_t miss_cnt;
-    uint64_t retry_cnt;
+    uint64_t retry_cnt; // 其实是try_cnt，=1是一次成功，=2是重试了一次，retry_cnt = try_cnt - 1
 
     // Data part
     SlotOffset offset[DIR_SIZE] ; // 记录当前CurSeg中的freeslot开头？仅作参考，还是每个cli进行随机read
                         // 还是随机read吧，使用一个固定的序列？保存在本地，免得需要修改远端的。
     Directory *dir;
+#if LARGER_FP_FILTER_GRANULARITY
+    CurSegMeta *seg_meta[DIR_SIZE]; // 本地缓存CurSegMeta
+#endif
 };
 
 class Server : public BasicDB

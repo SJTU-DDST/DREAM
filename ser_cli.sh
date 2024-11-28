@@ -19,7 +19,7 @@ else
 
     for num_cli in `seq $2 $2`;do
         for num_coro in `seq 1 $3`;do
-            for load_num in 10000;do
+            for load_num in 0;do
                 echo "num_cli" $num_cli "num_coro" $num_coro "load_num" $load_num
                 # ./ser_cli_var_kv \
                 ./ser_cli \
@@ -28,11 +28,11 @@ else
                 --max_coro 256 --cq_size 64 \
                 --machine_id $1  \
                 --load_num $load_num \
-                --num_op 10000 \
-                --pattern_type 2 \
-                --insert_frac 0.0 \
+                --num_op 100000 \
+                --pattern_type 0 \
+                --insert_frac 1.0 \
                 --read_frac   0.0 \
-                --update_frac  1.0 \
+                --update_frac  0.0 \
                 --delete_frac  0.0 \
                 --read_size     64
             done 
@@ -54,3 +54,9 @@ fi
 # ./ser_cli --server --gid_idx 1 --max_coro 256 --cq_size 64 --mem_size 8000000000
 # On 72
 # ../ser_cli.sh 0 28 4 1
+
+# TODO: 测试纯insert吞吐量、延迟，画图
+# 变量：是否允许key范围重叠（默认允许）、zipf theta（大的容易冲突），线程数(越多越容易冲突)
+# 
+
+# ./ser_cli --server_ip 192.168.98.74 --num_machine 1 --num_cli 2 --num_coro 1 --gid_idx 1 --max_coro 256 --cq_size 64 --machine_id 0 --load_num 0 --num_op 100000 --pattern_type 0 --insert_frac 1.0 --read_frac 0.0 --update_frac 0.0 --delete_frac 0.0 --read_size 64

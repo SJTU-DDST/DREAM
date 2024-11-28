@@ -1,0 +1,23 @@
+// .vscode/tasks.json
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build", // 任务名称，与 preLaunchTask 中的名称匹配
+			"type": "shell",
+			"command": "make", // 使用 make 进行构建
+			"args": [
+				"-C",
+				"${workspaceFolder}/build",
+				"ser_cli" // 指定构建目标
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": [
+				"$gcc"
+			]
+		}
+	]
+}

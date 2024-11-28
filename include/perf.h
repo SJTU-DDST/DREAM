@@ -60,7 +60,7 @@ struct Perf
                 file << latency << "\n"; // 每个时延一行
             }
             file.close(); // 关闭文件
-            std::cout << "Data exported to file: " <<file_name<< std::endl;
+            // std::cout << "Data exported to file: " <<file_name<< std::endl;
         } else {
             std::cout << "Failed to open the output file." << std::endl;
         }
@@ -86,6 +86,7 @@ struct SumCost
     double merge_time = 0;
     double split_time = 0;
     double insert_time = 0;
+    int insert_cnt = 0;
     std::vector<uint64_t> retry_cnt;
     std::vector<uint64_t> level_cnt;
 
@@ -127,6 +128,7 @@ struct SumCost
         auto end = std::chrono::high_resolution_clock::now();
         double duration = std::chrono::duration<double, std::micro>(end - insert_start).count();
         insert_time += duration;
+        insert_cnt++;
 #endif
     }
 
@@ -174,7 +176,7 @@ struct SumCost
                 file << latency << "\n"; // 每个时延一行
             }
             file.close(); // 关闭文件
-            std::cout << "Data exported to file: " <<file_name<< std::endl;
+            // std::cout << "Data exported to file: " <<file_name<< std::endl;
         } else {
             std::cout << "Failed to open the output file." << std::endl;
         }
@@ -185,9 +187,16 @@ struct SumCost
     void print(uint64_t cli_id,uint64_t coro_id){
 #ifdef USE_SUM_COST
         printf("merge_cnt:%ld, merge_time:%lf, split_cnt:%ld, split_time:%lf, insert_time:%lf\n",merge_cnt,merge_time,split_cnt,split_time,insert_time);
-        
+        // print avg insert time
+        printf("avg_insert:%lf\n",insert_time/insert_cnt);
         std::string insert_file_name = "insert_lat" + std::to_string(cli_id) + std::to_string(coro_id)+".txt";
         to_file(insert_file_name.c_str(),retry_cnt);
+        // print avg_retry
+        uint64_t sum = 0;
+        for (const auto& latency : retry_cnt) {
+            sum += latency;
+        }
+        printf("avg_retry:%lf\n",1.0*sum/retry_cnt.size());
         std::string search_file_name = "search_lat" + std::to_string(cli_id) + std::to_string(coro_id)+".txt";
         to_file(search_file_name.c_str(),level_cnt);
 #endif

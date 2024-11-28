@@ -187,17 +187,22 @@ int main(int argc, char *argv[])
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
             rdma_clis[i] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[i] = rdma_clis[i]->connect(config.server_ip);
+            rdma_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
             assert(rdma_conns[i] != nullptr);
-            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip);
+            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
             assert(rdma_wowait_conns[i] != nullptr);
             for (uint64_t j = 0; j < config.num_coro; j++)
             {
                 lmrs[i * config.num_coro + j] =
                     dev.create_mr(cbuf_size, mem_buf + cbuf_size * (i * config.num_coro + j));
                 BasicDB *cli;
+#if RDMA_SIGNAL
+                cli = new ClientType(config, lmrs[i * config.num_coro + j], rdma_clis[i], rdma_conns[i],
+                                     rdma_wowait_conns[i], nullptr, config.machine_id, i, j);
+#else
                 cli = new ClientType(config, lmrs[i * config.num_coro + j], rdma_clis[i], rdma_conns[i],
                                      rdma_wowait_conns[i], config.machine_id, i, j);
+#endif
                 clis.push_back(cli);
             }
         }
@@ -213,14 +218,20 @@ int main(int argc, char *argv[])
         {
             rdma_clis[config.num_cli] =
                 new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
-            rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
+            rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
+            rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
 
             lmrs[config.num_cli * config.num_coro] =
                 dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
+#if RDMA_SIGNAL
             ClientType *rehash_cli = new ClientType(
                 config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
-                rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
+                rdma_wowait_conns[config.num_cli], nullptr, config.num_cli, config.num_coro, 0);
+#else
+            ClientType *rehash_cli = new ClientType(
+                config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
+                rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro, 0);
+#endif
             auto th = [&](rdma_client *rdma_cli) {
                 // rdma_cli->run(rehash_cli->rehash(exit_flag));
             };
@@ -309,14 +320,20 @@ int main(int argc, char *argv[])
         {
             rdma_clis[config.num_cli] =
                 new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
-            rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
+            rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
+            rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
 
             lmrs[config.num_cli * config.num_coro] =
                 dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
+#if RDMA_SIGNAL
             ClientType *check_cli = new ClientType(
                 config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
-                rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
+                rdma_wowait_conns[config.num_cli], nullptr, config.num_cli, config.num_coro, 0);
+#else
+            ClientType *check_cli = new ClientType(
+                config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
+                rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro, 0);
+#endif
 
             auto th = [&](rdma_client *rdma_cli) {
                 // while(rdma_cli->run(check_cli->check_exit())){

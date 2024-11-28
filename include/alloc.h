@@ -33,7 +33,7 @@ struct RAlloc{
             res = (res>>3)<<3; //按八字节对齐
             roffset =  raddr - res;
         }
-        assert(roffset < rsize);
+        assert(roffset < rsize); // FIXME: 空间可能不够。每次扩容时空间*2，之后如果装得下就原地写入（可能读到部分写入）。 or slab alloc。or 链表 main seg。
         return res;
     }
 

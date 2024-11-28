@@ -1,9 +1,10 @@
-cmake_minimum_required(VERSION 3.0.2)
-SET(CMAKE_CXX_COMPILER "/usr/bin/g++-11")
+cmake_minimum_required(VERSION 3.10)
+# SET(CMAKE_CXX_COMPILER "/usr/bin/g++")
 project(MyIndex)
 set(CMAKE_CXX_FLAGS "-O3") # -march=native
 # set(CMAKE_CXX_FLAGS "-g -O0") # -march=native
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(
   ${catkin_INCLUDE_DIRS}
@@ -30,3 +31,5 @@ target_link_libraries(ser_cli PRIVATE ${libs})
 
 add_executable(ser_cli_var_kv test/ser_cli_var_kv.cc ${src})
 target_link_libraries(ser_cli_var_kv PRIVATE ${libs})
+
+# cmake -D CMAKE_C_COMPILER=/usr/local/bin/gcc -D CMAKE_CXX_COMPILER=/usr/local/bin/g++ ..

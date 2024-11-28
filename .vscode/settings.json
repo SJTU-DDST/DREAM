@@ -85,6 +85,16 @@
     "format": "cpp",
     "locale": "cpp",
     "charconv": "cpp",
-    "forward_list": "cpp"
+    "forward_list": "cpp",
+    "execution": "cpp",
+    "__locale": "cpp",
+    "print": "cpp",
+    "version": "cpp",
+    "span": "cpp",
+    "cassert": "cpp",
+    "cerrno": "cpp",
+    "queue": "cpp",
+    "stack": "cpp",
+    "source_location": "cpp"
   }
 }

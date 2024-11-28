@@ -95,7 +95,7 @@ class seq_gen : public Generator
 public:
     seq_gen(uint64_t _items) :items{_items},cur{0} {}
     uint64_t operator()(double u) { 
-        return cur++;
+        return cur++ % items; // IMPORTANT: 如果去掉%items，会导致cur溢出。但限制了key的范围。
     }
 };
 
