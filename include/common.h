@@ -65,6 +65,7 @@ constexpr uint32_t SPLIT_OK = 0xdeadbeef;
 #endif
 
 // Config
+#define ALLOC_CORO_THREAD_SAFE 0
 #define INTEGRATED_SLOT_CNT 1 // 将 local_depth 和 slot_cnt 合并到一个 uint64_t 类型的位域中。
 // #define ALLOW_KEY_OVERLAP // 允许不同thread/coroutine的key范围重叠。即使key范围不重叠，也可能映射到同一个CurSeg，导致CAS失败。
 #define RETRY_CAS 1 // 更新中CAS失败后重试。
@@ -86,6 +87,7 @@ constexpr uint32_t SPLIT_OK = 0xdeadbeef;
 #else
 #define log_err(fmt, arg...) do_log(ERROR, fmt, ##arg)
 #define log_test(fmt, arg...) //do_log(TEST, fmt, ##arg)
+#define log_merge(fmt, arg...) //do_log(MERGE, fmt, ##arg)
 #endif
 #else
 #define log_err(fmt, arg...)

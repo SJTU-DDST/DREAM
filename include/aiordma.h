@@ -83,7 +83,6 @@ using FpBitmapType = uint64_t;
 
 constexpr uint64_t LOCAL_DEPTH_BITS = 55;
 constexpr uint64_t SIGN_AND_SLOT_CNT_BITS = 64 - LOCAL_DEPTH_BITS;
-// constexpr uint64_t INVALID_SRQ_ID = UINT64_MAX;
 struct CurSegMeta
 {
     uint8_t sign : 1; // 实际中的split_lock可以和sign、depth合并，这里为了不降rdma驱动版本就没有合并。
@@ -99,17 +98,11 @@ struct CurSegMeta
 #if FAA_DETECT_FULL && !INTEGRATED_SLOT_CNT   // TODO: 可以用offset代替，但要防止uint8溢出
     uint64_t slot_cnt;                        // 添加一个变量，指示CurSeg中slot的数量，用FAA+1。注意FAA可能把它加到超出SLOT_PER_SEG，考虑mod SLOT_PER_SEG。或者把FAA batching到send后面。
 #endif
-// #if SEND_MULTI_SEG // srq id
-    // uint64_t srq_id; // = INVALID_SRQ_ID;
     struct ibv_srq *srq;
-// #endif
 
     void print(std::string desc = "")
     {
-        log_err("%s sign:%d local_depth:%lu main_seg_ptr:%lx main_seg_len:%lx", desc.c_str(), sign, local_depth, main_seg_ptr, main_seg_len);
-#if SEND_MULTI_SEG
-        log_err("srq:%p", srq);
-#endif
+        log_err("%s slot_cnt:%lu local_depth:%lu main_seg_ptr:%lx main_seg_len:%lu srq:%p", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len, srq);
     }
 } __attribute__((aligned(1)));
 
@@ -342,6 +335,10 @@ struct rdma_coro
     rdma_coro_desc desc;
     std::chrono::steady_clock::time_point start_time;
 #endif
+    void print(std::string desc = "")
+    {
+        log_err("%s: Coro ID: %u, Context ID: %u, File: %s:%d, Desc: %s", desc.c_str(), this->id, this->ctx, this->location.file_name(), this->location.line(), std::format("[{}:{}]segloc:{}第{}次SEND slot", this->desc.cli_id, this->desc.coro_id, this->desc.segloc, this->desc.send_cnt).c_str());
+    }
 };
 
 class rdma_worker : noncopyable
@@ -353,7 +350,9 @@ public:
     rdma_dev &dev;
     ibv_cq *cq{nullptr};
     std::shared_ptr<std::vector<rdma_coro>> coros; // shared rdma_coro *coros{nullptr};
-    std::shared_ptr<uint32_t> free_head;           // shared uint32_t free_head{0};
+    std::shared_ptr<uint32_t> free_head;
+    // std::mutex free_head_mutex; // 用于保护 free_head 的互斥锁
+    uint64_t _max_segloc{0};
 
 protected:
     const ibv_qp_cap &qp_cap;
@@ -625,6 +624,7 @@ public:
 
 class rdma_conn
 {
+public:
     rdma_dev &dev;
     rdma_worker *worker;
     int sock;
@@ -661,6 +661,7 @@ public:
 #endif
 
     void pure_write(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey = 0);
+    void pure_write_with_imm(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey, uint32_t imm_data);
     void pure_send(void *laddr, uint32_t len, uint32_t lkey = 0);
     void pure_read(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey = 0);
     void pure_recv(void *laddr, uint32_t len, uint32_t lkey = 0);
@@ -691,6 +692,7 @@ public:
     rdma_faa_future faa(const rdma_rmr &remote_mr, uint32_t offset, uint64_t addval DEBUG_LOCATION_DECL)
     { return faa(remote_mr.raddr + offset, remote_mr.rkey, addval DEBUG_LOCATION_CALL_ARG); }
     rdma_future send(void *laddr, uint32_t len, uint32_t lkey = 0 DEBUG_LOCATION_DECL DEBUG_DESC_DECL);
+    rdma_future send_with_imm(void *laddr, uint32_t len, uint32_t lkey, uint32_t imm_data DEBUG_LOCATION_DECL DEBUG_DESC_DECL);
     rdma_future send_then_read(void *send_laddr, uint32_t send_len, uint32_t send_lkey, uint64_t read_raddr, uint32_t read_rkey, void *read_laddr, uint32_t read_len, uint32_t read_lkey DEBUG_LOCATION_DECL);
     rdma_future send_then_fetch_add(void *send_laddr, uint32_t send_len, uint32_t send_lkey, uint64_t faa_raddr, uint32_t faa_rkey, uint64_t &faa_fetch, uint64_t faa_addval DEBUG_LOCATION_DECL);
     rdma_buffer_future recv(uint32_t len DEBUG_LOCATION_DECL);
@@ -764,6 +766,7 @@ inline void fill_rw_wr(ibv_send_wr *wr, ibv_sge *sge, uint64_t raddr, uint32_t r
     wr->opcode = opcode;
     wr->wr.rdma.remote_addr = raddr;
     wr->wr.rdma.rkey = rkey;
+    // log_err("opcode:%d, raddr:%lx, rkey:%u, laddr:%p, len:%u, lkey:%u", opcode, raddr, rkey, laddr, len, lkey);
 }
 
 template <ibv_wr_opcode opcode>
