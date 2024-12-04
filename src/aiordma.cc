@@ -559,18 +559,23 @@ void rdma_worker::start_periodic_task()
     // log_err("开始定期打印协程信息");
     periodic_thread = std::thread([this]()
                                   {
+        std::unique_lock<std::mutex> lk(cv_m);
         while (!stop_flag.load()) {
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-            if (!stop_flag.load()) {
-                print_running_coros();
+            if (cv.wait_for(lk, std::chrono::seconds(5), [this] { return stop_flag.load(); })) {
+                break;
             }
+            print_running_coros();
         } });
 }
 
 void rdma_worker::stop_periodic_task()
 {
     // log_err("停止定期打印协程信息");
-    stop_flag.store(true);
+    {
+        std::lock_guard<std::mutex> lk(cv_m);
+        stop_flag.store(true);
+    }
+    cv.notify_all();
     if (periodic_thread.joinable())
     {
         periodic_thread.join();
@@ -668,7 +673,7 @@ void rdma_worker::worker_loop()
                 CurSeg *cur_seg = reinterpret_cast<CurSeg *>(this->dir->segs[segloc].cur_seg_ptr);
                 // cur_seg->seg_meta.print("before:");
 #if RDMA_SIGNAL
-                if (segloc == SPLIT_OK || split_ok)
+                if (split_ok)
                 {
                     log_test("接收到SPLIT_OK信号，准备创建新的SRQ，但不会马上post RECV, indice: %u", segloc);
 

@@ -327,7 +327,11 @@ struct rdma_coro
 #endif
     void print(std::string desc = "")
     {
+#if CORO_DEBUG
         log_err("%s: Coro ID: %u, Context ID: %u, File: %s:%d, Desc: %s", desc.c_str(), this->id, this->ctx, this->location.file_name(), this->location.line(), std::format("[{}:{}]segloc:{}第{}次SEND slot", this->desc.cli_id, this->desc.coro_id, this->desc.segloc, this->desc.send_cnt).c_str());
+#else
+        log_err("%s: Coro ID: %u, Context ID: %u", desc.c_str(), this->id, this->ctx);
+#endif
     }
 };
 
@@ -377,6 +381,8 @@ protected:
 #if CORO_DEBUG
     std::thread periodic_thread;
     std::atomic<bool> stop_flag;
+    std::condition_variable cv;
+    std::mutex cv_m;
     inline void print_running_coros();
     void start_periodic_task();
     void stop_periodic_task();
@@ -654,7 +660,6 @@ public:
     void pure_recv(void *laddr, uint32_t len, uint32_t lkey = 0);
 
     // co_return int: 1: success, 0: failure
-    // #if CORO_DEBUG
     rdma_future do_send(ibv_send_wr *wr_begin, ibv_send_wr *wr_end DEBUG_LOCATION_DECL DEBUG_DESC_DECL);
     rdma_future do_recv(ibv_recv_wr *wr DEBUG_LOCATION_DECL);
 

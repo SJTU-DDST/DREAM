@@ -21,14 +21,14 @@
 #include <source_location>
 #include <sys/mman.h>
 #include <utility>
+#include <condition_variable>
+#include <mutex>
 
 #define MODIFIED 1
 #if MODIFIED
 // Modified
 #define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
-#define CORO_DEBUG 1 // 协程调试
 #define LARGER_FP_FILTER_GRANULARITY 1 // 使用更大的FP过滤粒度，避免写入FP过滤器前需要先读取。现在先用每个FP占用64bit粒度，可能可以改成8bit。TODO: 读取filter的地方还没改。
-
 // #define SEND_MULTI_SEG 1 // 启用多个TempSeg，用于测试多个TempSeg的性能。
 // 1. 允许client在满时分裂 OK
 // 2. client分裂后发出write with imm通知server OK
@@ -39,18 +39,11 @@
 // 5. 判断远端分裂后check_gd，重试写入 TODO:
 // 6. client判断远端分裂后，刚才的写入需要无效化，在Slot中添加4bit的发送方local_depth，如果不一致，合并时丢弃该条目 TODO:
 // 7. 允许用0以外的segloc，如果发现本地的CurSegMeta没有对应的条目，创建新QP以连接新的SRQ OK
-
-#define LARGE_MAIN_SEG 0 // 使用大的main_seg，相当于禁用分裂
-constexpr uint32_t SPLIT_OK = 0xdeadbeef;
 #else
 // SepHash
 // #define TEST_SEND 0
 // #define SEND_TO_CURSEG 0
 // #define REMOVE_CAS 0 // 后续去掉
-
-#define LARGE_MAIN_SEG 0
-#define CORO_DEBUG 1 // 协程调试
-
 // SepHash fixes
 // 更新/删除转换为插入
 // 合并时fp相同检查完整key
@@ -60,6 +53,8 @@ constexpr uint32_t SPLIT_OK = 0xdeadbeef;
 #endif
 
 // Config
+#define CORO_DEBUG 1 // 协程调试
+#define LARGE_MAIN_SEG 0 // 使用大的main_seg，相当于禁用分裂
 #define ALLOC_CORO_THREAD_SAFE 0
 // #define INTEGRATED_SLOT_CNT 1 // 将 local_depth 和 slot_cnt 合并到一个 uint64_t 类型的位域中。
 // #define ALLOW_KEY_OVERLAP // 允许不同thread/coroutine的key范围重叠。即使key范围不重叠，也可能映射到同一个CurSeg，导致CAS失败。
