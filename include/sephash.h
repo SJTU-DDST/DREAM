@@ -24,12 +24,12 @@ constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t)+sizeof(uin
 constexpr uint64_t SLOT_BATCH_SIZE = 8;
 constexpr uint64_t RETRY_LIMIT = (SLOT_PER_SEG/SLOT_BATCH_SIZE); // TODO : 后期试试改成其他较小的值
 #if LARGE_MAIN_SEG
-constexpr uint64_t MAX_MAIN_SIZE = 640000 * SLOT_PER_SEG; // IMPORTANT: 现在main seg不能分裂
+constexpr uint64_t MAX_MAIN_SIZE = 640000 * SLOT_PER_SEG; // IMPORTANT: 打开后相当于main seg不能分裂
 #else
 constexpr uint64_t MAX_MAIN_SIZE = 64 * SLOT_PER_SEG;
 #endif
 // constexpr uint64_t MAX_FP_INFO = 256;
-constexpr uint64_t INIT_DEPTH = 0; // 4; IMPORTANT: 现在只有1个segment
+constexpr uint64_t INIT_DEPTH = 0; // 4; FIXME: 目前还不支持>0的INIT_DEPTH
 // constexpr uint64_t MAX_DEPTH = 16;
 // constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
 constexpr uint64_t ALIGNED_SIZE = 64;             // aligned size of len bitfield in DepSlot
@@ -152,9 +152,6 @@ struct MainSeg
 //     // TODO : 实际上只需要用5 bits，为了方便ptr统一48，所以这里仍保留16bits
 //     uint64_t local_depth ; 
 //     uintptr_t cur_seg_ptr ;
-// #if !SEND_TO_CURSEG
-//     uintptr_t temp_seg_ptr ;
-// #endif
 //     uintptr_t main_seg_ptr ;
 //     uint64_t main_seg_len ;
 //     FpInfo fp[MAX_FP_INFO];

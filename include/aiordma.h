@@ -86,18 +86,11 @@ constexpr uint64_t SIGN_AND_SLOT_CNT_BITS = 64 - LOCAL_DEPTH_BITS;
 struct CurSegMeta
 {
     uint8_t sign : 1; // 实际中的split_lock可以和sign、depth合并，这里为了不降rdma驱动版本就没有合并。
-#if INTEGRATED_SLOT_CNT
-    uint64_t slot_cnt : 8;                   // 将 slot_cnt 的位数减少到 8 位
+    uint64_t slot_cnt : 8;                   // 将 slot_cnt 的位数减少到 8 位。指示CurSeg中slot的数量，注意FAA可能把它加到超出SLOT_PER_SEG，因此会在合并时清零。使用FAA+(1<<1)，从而避免增加sign。
     uint64_t local_depth : LOCAL_DEPTH_BITS; // 将 local_depth 的位数减少到 55 位
-#else
-    uint64_t local_depth : 63; // TODO: 和slot_cnt合并，slot_cnt放在前几位
-#endif
     uintptr_t main_seg_ptr;
     uintptr_t main_seg_len;
     FpBitmapType fp_bitmap[FP_BITMAP_LENGTH]; // 16*64 = 1024,代表10bits fp的出现情况；整个CurSeg大约会出现（1024/8=128）个FP，因此能极大的减少search对CurSeg的访问
-#if FAA_DETECT_FULL && !INTEGRATED_SLOT_CNT   // TODO: 可以用offset代替，但要防止uint8溢出
-    uint64_t slot_cnt;                        // 添加一个变量，指示CurSeg中slot的数量，用FAA+1。注意FAA可能把它加到超出SLOT_PER_SEG，考虑mod SLOT_PER_SEG。或者把FAA batching到send后面。
-#endif
     struct ibv_srq *srq;
 
     void print(std::string desc = "")
@@ -130,9 +123,6 @@ struct DirEntry
     // TODO : 实际上只需要用5 bits，为了方便ptr统一48，所以这里仍保留16bits
     uint64_t local_depth;
     uintptr_t cur_seg_ptr;
-#if !SEND_TO_CURSEG
-    uintptr_t temp_seg_ptr;
-#endif
     uintptr_t main_seg_ptr;
     uint64_t main_seg_len;
     FpInfo fp[MAX_FP_INFO];
@@ -367,9 +357,6 @@ protected:
     ibv_mr *mpmr{nullptr};
 
     Directory *dir{nullptr};
-#if !SEND_TO_CURSEG
-    uintptr_t *temp_seg_ptr_addr{nullptr};
-#endif
 
 #ifdef ENABLE_DOCA_DMA
     doca_mmap *mpmmp{nullptr};

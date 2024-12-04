@@ -625,71 +625,10 @@ void rdma_worker::worker_loop()
 
         for (int i = 0; i < ready_num; ++i)
         {
+#if CORO_DEBUG
             last_poll_time = std::chrono::steady_clock::now();
+#endif
             auto &&wc = wcs[i];
-#if !WRITE_WITH_IMM_SIGNAL && MODIFIED
-            if (wc.opcode == IBV_WC_RECV) {
-                // log_err("RECV opcode: %d, status: %d, byte_len: %d, qp_num: %d, src_qp: %d, pkey_index: %d, slid: %d, sl: %d, dlid_path_bits: %d", wc.opcode, wc.status, wc.byte_len, wc.qp_num, wc.src_qp, wc.pkey_index, wc.slid, wc.sl, wc.dlid_path_bits);
-
-                int slot_index = 0;
-                CurSeg *cur_seg = cur_seg_ptr_addr ? (CurSeg *) *cur_seg_ptr_addr : nullptr;
-                uint8_t sign = *(((uint64_t *)cur_seg) + 1); // cur_seg->seg_meta.sign;
-#if !SEND_TO_CURSEG
-                CurSeg *temp_seg = temp_seg_ptr_addr ? (CurSeg *) *temp_seg_ptr_addr : nullptr;
-                Slot *tmp_slot = (Slot *) wc.wr_id;
-                slot_index = tmp_slot - temp_seg->slots;
-                // log_err("收到第%d个地址: %p, 长度: %lu, lkey: %lu", slot_index, tmp_slot, wc.byte_len, wc.slid);
-                // if (tmp_slot) tmp_slot->print();
-#else
-                // TODO: 可能需要去掉recv中的cor相关代码
-                Slot *cur_slot = (Slot *) wc.wr_id;
-                slot_index = cur_slot - cur_seg->slots;
-#endif
-                if (slot_index == SLOT_PER_SEG - 1) { // TODO: 改为使用signal conn接收切换CurSeg信号。FIXME: wr_id不能存地址，因为已经用于协程。
-                    // log_err("等待客户端合并一秒钟，再为CurSeg发布RECV");
-                    // sleep(1);
-                    while (*(((uint64_t *)cur_seg) + 1) == sign) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                    }
-                    log_err("sign被反转，切换到下一个CurSeg");
-#if !SEND_TO_CURSEG
-                    // 对比两个CurSeg的slots是否相同
-                    for (int i = 0; i < SLOT_PER_SEG; i++) {
-                        Slot *temp_slot = &temp_seg->slots[i];
-                        Slot *cur_slot = &cur_seg->slots[i];
-                        // 用memcmp比较
-                        if (memcmp(temp_slot, cur_slot, sizeof(Slot)) != 0 && i != SLOT_PER_SEG - 1) {
-                            log_err("第%d个slot不相同", i); // 如果是112，CAS还在路上，sleep一会就能解决
-                            temp_slot->print();
-                            cur_slot->print();
-                        }
-                    }
-#endif
-
-                    for (int i = 0; i < SLOT_PER_SEG; i++) {
-#if SEND_TO_CURSEG
-                        Slot *slot = &cur_seg->slots[i];
-#else
-                        Slot *slot = &temp_seg->slots[i];
-#endif
-                        auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
-                        assert_check(sge);
-                        auto recv_wr = (ibv_recv_wr *)wr;
-                        fill_recv_wr(recv_wr, (ibv_sge *)sge, slot, sizeof(Slot), lkey());
-                        recv_wr->wr_id = (uint64_t) slot; // 64BIT，可以放地址 // FIXME: wr_id不能存地址，因为已经用于协程。不过此处直接ibv_post_recv，不需要协程。
-                        ibv_recv_wr *bad;
-                        if (srq) 
-                        {
-                            assert_check(0 == ibv_post_srq_recv(srq, recv_wr, &bad));
-                            // log_err("post第%d个slot，ptr: %p, srq: %p, len: %lu, lkey: %lu", i, recv_wr->sg_list->addr, srq, recv_wr->sg_list->length, recv_wr->sg_list->lkey);
-                        }
-                        free_buf(sge);
-                        // log_err("post第%d个slot，ptr: %p, len: %lu, lkey: %lu", i, recv_wr->sg_list->addr, recv_wr->sg_list->length, recv_wr->sg_list->lkey);
-                    }
-                }
-                continue;
-            }
-#endif
             // log_err("接收到 opcode: %d, status: %d, byte_len: %d, qp_num: %d, src_qp: %d, pkey_index: %d, slid: %d, sl: %d, dlid_path_bits: %d, imm_data: %d", wc.opcode, wc.status, wc.byte_len, wc.qp_num, wc.src_qp, wc.pkey_index, wc.slid, wc.sl, wc.dlid_path_bits, wc.imm_data);
 
             // if (wc.opcode == IBV_WC_SEND) {
@@ -751,16 +690,12 @@ void rdma_worker::worker_loop()
                 {
                     // CurSeg *cur_seg = cur_seg_ptr_addr ? reinterpret_cast<CurSeg *>(*cur_seg_ptr_addr) : nullptr; // TODO: 根据segloc找到CurSeg
                     // CurSeg *cur_seg = reinterpret_cast<CurSeg *>(this->dir->segs[segloc].cur_seg_ptr);
-#if WRITE_WITH_IMM_SIGNAL
+#if MODIFIED
                     // log_err("将segloc:%u的CurSeg的slots全部清空，slot_cnt: %d->0", segloc, cur_seg->seg_meta.slot_cnt);
                     // cur_seg->seg_meta.slot_cnt = 0; // CurSeg中的条目已经被清空，将slot_cnt置为0避免溢出，已改为在客户端RDMA WRITE
                     for (int i = 0; i < SLOT_PER_SEG; i++)
                     {
-#if SEND_TO_CURSEG
                         Slot *slot = &cur_seg->slots[i];
-#else
-                        Slot *slot = &temp_seg->slots[i];
-#endif
                         auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
                         assert_check(sge);
                         auto recv_wr = (ibv_recv_wr *)wr;
@@ -867,13 +802,9 @@ rdma_server::~rdma_server()
 {
     stop_serve();
 }
-// #if SEND_TO_CURSEG
+
 void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int worker_num, const ibv_qp_cap &qp_cap,
                               int tempmp_size, int max_coros, int cq_size, int port, Directory *dir)
-// #else
-// void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int worker_num, const ibv_qp_cap &qp_cap,
-//                               int tempmp_size, int max_coros, int cq_size, int port, uintptr_t* cur_seg_ptr_addr, uintptr_t* temp_seg_ptr_addr)
-// #endif
 {
     // log_err("start_serve handler: %p, worker_num: %d, qp_cap: %p, tempmp_size: %d, max_coros: %d, cq_size: %d, port: %d", handler, worker_num, &qp_cap, tempmp_size, max_coros, cq_size, port);
     sockaddr_in local_addr;
@@ -915,9 +846,6 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
         // assert_require(qp_cap.max_send_wr == 0 && qp_cap.max_recv_wr == 0);
         // workers.emplace_back(new rdma_worker(dev, qp_cap, 0, 0, 1));
         auto worker = new rdma_worker(dev, sr_qp_cap, tempmp_size, max_coros, cq_size, dir); // 允许server recv
-#if TEST_SEND && !SEND_TO_CURSEG
-        worker->temp_seg_ptr_addr = temp_seg_ptr_addr;
-#endif
         workers.emplace_back(worker);
         // worker_threads.emplace_back(std::thread()); // 之前server不轮询cq
         worker_threads.emplace_back(std::thread(&rdma_worker::worker_loop, workers[0])); // server只有一个worker，轮询它的cq
@@ -991,12 +919,7 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                                 if (!is_signal_conn && !post_recv_flag_map[segloc])
                                 {
                                     post_recv_flag_map[segloc] = true;
-#if SEND_TO_CURSEG
-                                    // CurSeg *seg = conn->worker->cur_seg_ptr_addr ? (CurSeg *) *(conn->worker->cur_seg_ptr_addr) : nullptr;
                                     CurSeg *seg = reinterpret_cast<CurSeg *>(conn->worker->dir->segs[segloc].cur_seg_ptr);
-#else
-                                    CurSeg *seg = conn->worker->temp_seg_ptr_addr ? (CurSeg *) *(conn->worker->temp_seg_ptr_addr) : nullptr;
-#endif
                                     for (int i = 0; i < SLOT_PER_SEG; i++)
                                     {
                                         // log_err("准备post第%d个recv, seg: %p, temp_slot: %p", i, seg, &seg->slots[i]);
