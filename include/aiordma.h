@@ -91,11 +91,10 @@ struct CurSegMeta
     uintptr_t main_seg_ptr;
     uintptr_t main_seg_len;
     FpBitmapType fp_bitmap[FP_BITMAP_LENGTH]; // 16*64 = 1024,代表10bits fp的出现情况；整个CurSeg大约会出现（1024/8=128）个FP，因此能极大的减少search对CurSeg的访问
-    struct ibv_srq *srq;
 
     void print(std::string desc = "")
     {
-        log_err("%s slot_cnt:%lu local_depth:%lu main_seg_ptr:%lx main_seg_len:%lu srq:%p", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len, srq);
+        log_err("%s slot_cnt:%lu local_depth:%lu main_seg_ptr:%lx main_seg_len:%lu", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len);
     }
 } __attribute__((aligned(1)));
 

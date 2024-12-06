@@ -29,7 +29,7 @@ constexpr uint64_t MAX_MAIN_SIZE = 640000 * SLOT_PER_SEG; // IMPORTANT: 打开�
 constexpr uint64_t MAX_MAIN_SIZE = 64 * SLOT_PER_SEG;
 #endif
 // constexpr uint64_t MAX_FP_INFO = 256;
-constexpr uint64_t INIT_DEPTH = 0; // 4; FIXME: 目前还不支持>0的INIT_DEPTH
+constexpr uint64_t INIT_DEPTH = 4;
 // constexpr uint64_t MAX_DEPTH = 16;
 // constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
 constexpr uint64_t ALIGNED_SIZE = 64;             // aligned size of len bitfield in DepSlot

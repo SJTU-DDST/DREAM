@@ -33,18 +33,10 @@ namespace MYHASH
         {
             uint64_t root_segloc = get_seg_loc(pattern, dir->segs[segloc].local_depth);
             if (dir->segs[root_segloc].local_depth == dir->segs[segloc].local_depth)
-            { // 没分裂
+            {
                 // log_err("[%lu:%lu]本地还没分裂，segloc:%lu用root_segloc:%lu代替", cli_id, coro_id, segloc, root_segloc);
-                segloc = root_segloc;
-            }
-            else
-            { // 同步
-                // log_err("[%lu:%lu]本地已经分裂，root depth:%lu != segloc depth:%lu", cli_id, coro_id, dir->segs[root_segloc].local_depth, dir->segs[segloc].local_depth);
-                // dir->print("同步之前");
-                co_await check_gd(segloc);
-                // co_await check_gd(root_segloc);
-                // dir->print("同步之后");
-            }
+                segloc = root_segloc; // 如果local_depth<global_depth，会有多个segloc对应一个seg，此时将segloc最小的作为root_segloc用于send
+            } else co_await check_gd(segloc);
         }
         uintptr_t segptr = dir->segs[segloc].cur_seg_ptr;
         if (segptr == 0)
@@ -61,7 +53,6 @@ namespace MYHASH
 
         // 4. write slot
         // a. Init Slot
-        // uint64_t dep = 0; // seg_meta->local_depth - (seg_meta->local_depth % 4); // 按4对齐 FIXME: 去掉before read后现在还没有seg_meta，可以用缓存的dir->segs[segloc].local_depth
         uint64_t dep = dir->segs[segloc].local_depth - (dir->segs[segloc].local_depth % 4);
         // 去掉before read后现在还没有seg_meta，可以用缓存的dir->segs[segloc].local_depth
         // 这个会影响分裂后去到哪个segment，发送slot时需要带上本地的local_depth，分裂时如果不匹配则读取远端的local_depth
@@ -82,18 +73,10 @@ namespace MYHASH
         }
         if (!conns[segloc])
         {
-            // log_err("[%lu:%lu]创建新的rdma_conn, segloc:%lu", cli_id, coro_id,
-            //         segloc);
-            // dir->print(std::format("[{}:{}]segloc:{}创建新的rdma_conn之前", cli_id,
-            //                        coro_id, segloc));
             co_await check_gd(segloc);                                                                                                                                                    // 先更新对应&dir->segs[segloc]
             clis[segloc] = new rdma_client(clis[0]->dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size, nullptr, clis[0]->cq, clis[0]->coros, clis[0]->free_head); // 复用clis[0]的cq和coros, free_head
             conns[segloc] = clis[segloc]->connect(config.server_ip.c_str(), rdma_default_port, 0, segloc);                                                                                // 一个cli只能有一个cli->conn，需要新建cli
             assert(conns[segloc] != nullptr);
-            // log_err("[%lu:%lu]创建新的rdma_conn成功, segloc:%lu, qp_num:%d", cli_id,
-            //         coro_id, segloc, conns[segloc]->qp->qp_num);
-            // dir->print(std::format("[{}:{}]segloc:{}创建新的rdma_conn之后", cli_id,
-            //                        coro_id, segloc));
         }
         perf.start_perf();
 #if CORO_DEBUG
@@ -160,27 +143,10 @@ namespace MYHASH
         // check if need split
         if (seg_meta[segloc]->slot_cnt == 0)
         {
-            // dir->print(std::format("[{}:{}]合并之前", cli_id, coro_id));
-            uint64_t my_pattern = (uint64_t)hash(key->data, key->len);
-            uint64_t my_segloc = get_seg_loc(my_pattern, dir->global_depth);
-            uintptr_t my_segptr = dir->segs[my_segloc].cur_seg_ptr;
-            // if (my_segptr == 0)
-            // {                                          // 目前不会执行
-            //     my_segptr = co_await check_gd(my_segloc); // 现在只会修改main_seg_len和main_seg_ptr
-            //     uint64_t new_seg_loc = get_seg_loc(my_pattern, dir->global_depth);
-            //     if (new_seg_loc != my_segloc)
-            //     {
-            //         retry_reason = 1;
-            //         goto Retry;
-            //     }
-            // }
+            CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
+            co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
 
-            CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-            // auto read_meta =
-            co_await conns[0]->read(my_segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
-
-            co_await Split(my_segloc, segptr, my_seg_meta);
-            // dir->print(std::format("[{}:{}]合并之后", cli_id, coro_id));
+            co_await Split(segloc, segptr, my_seg_meta);
             send_cnt = 0;
             perf.push_insert();
             sum_cost.end_insert();

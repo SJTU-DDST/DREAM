@@ -158,9 +158,9 @@ Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn
 
 Client::~Client()
 {
-    // clis[0] 和 conns[0] 在初始化时由外部传入，不应该由当前类负责销毁。因此，我们只需要销毁从索引 1 开始的对象。
+    // clis[0~(1 << SEPHASH::INIT_DEPTH)-1] 和 conns[0~(1 << SEPHASH::INIT_DEPTH)-1] 在初始化时由外部传入，不应该由当前类负责销毁。因此，我们只需要销毁从索引 (1 << SEPHASH::INIT_DEPTH) 开始的对象。
     // 销毁 conns 中的动态对象
-    for (size_t i = 1; i < conns.size(); ++i)
+    for (size_t i = (1 << SEPHASH::INIT_DEPTH); i < conns.size(); ++i)
     {
         if (conns[i])
         {
@@ -170,7 +170,7 @@ Client::~Client()
     }
 
     // 销毁 clis 中的动态对象
-    for (size_t i = 1; i < clis.size(); ++i)
+    for (size_t i = (1 << SEPHASH::INIT_DEPTH); i < clis.size(); ++i)
     {
         if (clis[i])
         {
@@ -928,9 +928,6 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
         new_cur_seg->seg_meta.sign = 1;
         new_cur_seg->seg_meta.main_seg_ptr = new_main_ptr2;
         new_cur_seg->seg_meta.main_seg_len = off2;
-#if MODIFIED
-        new_cur_seg->seg_meta.srq = nullptr; // 分裂出来的新段不再使用原来的SRQ。这里需要服务端创建SRQ后填写。
-#endif
         wo_wait_conn->pure_write(new_cur_seg->seg_meta.main_seg_ptr, seg_rmr.rkey, new_seg_2, sizeof(Slot) * off2, lmr->lkey);
         co_await conns[0]->write(new_cur_ptr, seg_rmr.rkey, new_cur_seg, sizeof(CurSeg), lmr->lkey);
         // log_err("[%lu:%lu:%lu]更新新的CurSeg->seg_meta.local_depth: %lu", cli_id, coro_id, this->key_num, new_cur_seg->seg_meta.local_depth);
