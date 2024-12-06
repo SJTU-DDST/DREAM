@@ -30,7 +30,7 @@
 #define DEBUG_CORO_DEFINE
 #endif
 
-  constexpr uint64_t SEGMENT_SIZE = 1024;
+constexpr uint64_t SEGMENT_SIZE = 1024;
 constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(uint8_t)));
 
 struct Slot

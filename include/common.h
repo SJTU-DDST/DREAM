@@ -53,7 +53,7 @@
 #endif
 
 // Config
-#define CORO_DEBUG 1 // 协程调试
+#define CORO_DEBUG 0 // 协程调试
 #define LARGE_MAIN_SEG 0 // 使用大的main_seg，相当于禁用分裂
 #define ALLOC_CORO_THREAD_SAFE 0
 // #define INTEGRATED_SLOT_CNT 1 // 将 local_depth 和 slot_cnt 合并到一个 uint64_t 类型的位域中。

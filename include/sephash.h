@@ -37,6 +37,44 @@ constexpr uint64_t dev_mem_size = (1 << 10) * 64; // 64KB的dev mem，用作lock
 constexpr uint64_t num_lock =
     (dev_mem_size - sizeof(uint64_t)) / sizeof(uint64_t); // Lock数量，client对seg_id使用hash来共享lock
 
+inline __attribute__((always_inline)) uint64_t fp(uint64_t pattern)
+{
+    return ((uint64_t)((pattern) >> 32) & ((1 << 8) - 1));
+}
+
+inline __attribute__((always_inline)) uint64_t fp2(uint64_t pattern)
+{
+    return ((uint64_t)((pattern) >> 24) & ((1 << 8) - 1));
+}
+
+inline __attribute__((always_inline)) uint64_t get_seg_loc(uint64_t pattern, uint64_t global_depth)
+{
+    return ((pattern) & ((1 << global_depth) - 1));
+}
+
+#if LARGER_FP_FILTER_GRANULARITY
+inline __attribute__((always_inline)) uint64_t get_fp_bit(uint8_t fp1, uint8_t fp2)
+{
+    uint64_t fp = fp1;
+    fp = fp << 8;
+    fp = fp | fp2;
+    // fp = fp & ((1 << 4) - 1); // 现在先用原来的16位filter，后面再改
+    fp %= FP_BITMAP_LENGTH;
+    return fp;
+}
+#else
+inline __attribute__((always_inline)) std::tuple<uint64_t, uint64_t> get_fp_bit(uint8_t fp1, uint8_t fp2)
+{
+    uint64_t fp = fp1;
+    fp = fp << 8;
+    fp = fp | fp2;
+    fp = fp & ((1 << 10) - 1);
+    uint64_t bit_loc = fp / 64;
+    uint64_t bit_info = (fp % 64);
+    bit_info = 1ll << bit_info;
+    return std::make_tuple(bit_loc, bit_info);
+}
+#endif
 // struct Slot
 // {
 //     uint8_t fp : 8;
@@ -215,11 +253,11 @@ class Client : public BasicDB
     task<> update(Slice *key, Slice *value);
     task<> remove(Slice *key);
 
-  private:
+  protected:
     Config &config;
 
     task<> sync_dir();
-    task<uintptr_t> check_gd(uint64_t segloc,bool read_fp);
+    task<uintptr_t> check_gd(uint64_t segloc = -1, bool read_fp = false);
 
     task<> Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_meta);
     void merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg);
@@ -271,7 +309,7 @@ class Server : public BasicDB
     Server(Config &config);
     ~Server();
 
-  private:
+  protected:
     void Init();
 
     rdma_dev dev;

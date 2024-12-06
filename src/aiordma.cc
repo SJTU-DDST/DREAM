@@ -693,11 +693,6 @@ void rdma_worker::worker_loop()
                 }
                 else
                 {
-                    // CurSeg *cur_seg = cur_seg_ptr_addr ? reinterpret_cast<CurSeg *>(*cur_seg_ptr_addr) : nullptr; // TODO: 根据segloc找到CurSeg
-                    // CurSeg *cur_seg = reinterpret_cast<CurSeg *>(this->dir->segs[segloc].cur_seg_ptr);
-#if MODIFIED
-                    // log_err("将segloc:%u的CurSeg的slots全部清空，slot_cnt: %d->0", segloc, cur_seg->seg_meta.slot_cnt);
-                    // cur_seg->seg_meta.slot_cnt = 0; // CurSeg中的条目已经被清空，将slot_cnt置为0避免溢出，已改为在客户端RDMA WRITE
                     for (int i = 0; i < SLOT_PER_SEG; i++)
                     {
                         Slot *slot = &cur_seg->slots[i];
@@ -719,7 +714,6 @@ void rdma_worker::worker_loop()
                     }
                     if (segloc)
                         log_test("收到IMM，为segloc:%u,SRQ:%p发布%d个RECV, qp_num: %u", segloc, cur_seg->seg_meta.srq, SLOT_PER_SEG, wc.qp_num);
-#endif
                 }
                 auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
                 assert_check(sge);
@@ -1205,14 +1199,15 @@ int rdma_conn::modify_qp_to_rtr(uint32_t rqp_num, uint16_t rlid, const ibv_gid *
 int rdma_conn::modify_qp_to_rts()
 {
     const int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-                      IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
+                      IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
     struct ibv_qp_attr attr;
     int rc;
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTS;
     attr.timeout = 14;
     attr.retry_cnt = 7;
-    attr.rnr_retry = 7;
+    attr.rnr_retry = 7; // 值 7 是特殊的，指定在 RNR 的情况下重试无限次
+    attr.min_rnr_timer = 3; // 降低延迟。在开发过程中，最好将 attr.retry_cnt 和 attr.rnr_retry 设置为 0。
     attr.sq_psn = 0;
     attr.max_rd_atomic = rdma_max_rd_atomic; // FOR READ
     if ((rc = ibv_modify_qp(qp, &attr, flags)))

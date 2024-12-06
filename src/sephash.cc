@@ -2,46 +2,46 @@
 namespace SEPHASH
 {
 
-inline __attribute__((always_inline)) uint64_t fp(uint64_t pattern)
-{
-    return ((uint64_t)((pattern) >> 32) & ((1 << 8) - 1));
-}
+// inline __attribute__((always_inline)) uint64_t fp(uint64_t pattern)
+// {
+//     return ((uint64_t)((pattern) >> 32) & ((1 << 8) - 1));
+// }
 
-inline __attribute__((always_inline)) uint64_t fp2(uint64_t pattern)
-{
-    return ((uint64_t)((pattern) >> 24) & ((1 << 8) - 1));
-}
+// inline __attribute__((always_inline)) uint64_t fp2(uint64_t pattern)
+// {
+//     return ((uint64_t)((pattern) >> 24) & ((1 << 8) - 1));
+// }
 
-inline __attribute__((always_inline)) uint64_t get_seg_loc(uint64_t pattern, uint64_t global_depth)
-{
-    return ((pattern) & ((1 << global_depth) - 1));
-}
+// inline __attribute__((always_inline)) uint64_t get_seg_loc(uint64_t pattern, uint64_t global_depth)
+// {
+//     return ((pattern) & ((1 << global_depth) - 1));
+// }
 
 void print_mainseg(Slot *main_seg, uint64_t main_seg_len);
 
-#if LARGER_FP_FILTER_GRANULARITY
-inline __attribute__((always_inline)) uint64_t get_fp_bit(uint8_t fp1, uint8_t fp2)
-{
-    uint64_t fp = fp1;
-    fp = fp << 8;
-    fp = fp | fp2;
-    // fp = fp & ((1 << 4) - 1); // 现在先用原来的16位filter，后面再改
-    fp %= FP_BITMAP_LENGTH;
-    return fp;
-}
-#else
-inline __attribute__((always_inline)) std::tuple<uint64_t, uint64_t> get_fp_bit(uint8_t fp1, uint8_t fp2)
-{
-    uint64_t fp = fp1;
-    fp = fp << 8;
-    fp = fp | fp2;
-    fp = fp & ((1 << 10) - 1);
-    uint64_t bit_loc = fp / 64;
-    uint64_t bit_info = (fp % 64);
-    bit_info = 1ll << bit_info;
-    return std::make_tuple(bit_loc, bit_info);
-}
-#endif
+// #if LARGER_FP_FILTER_GRANULARITY
+// inline __attribute__((always_inline)) uint64_t get_fp_bit(uint8_t fp1, uint8_t fp2)
+// {
+//     uint64_t fp = fp1;
+//     fp = fp << 8;
+//     fp = fp | fp2;
+//     // fp = fp & ((1 << 4) - 1); // 现在先用原来的16位filter，后面再改
+//     fp %= FP_BITMAP_LENGTH;
+//     return fp;
+// }
+// #else
+// inline __attribute__((always_inline)) std::tuple<uint64_t, uint64_t> get_fp_bit(uint8_t fp1, uint8_t fp2)
+// {
+//     uint64_t fp = fp1;
+//     fp = fp << 8;
+//     fp = fp | fp2;
+//     fp = fp & ((1 << 10) - 1);
+//     uint64_t bit_loc = fp / 64;
+//     uint64_t bit_info = (fp % 64);
+//     bit_info = 1ll << bit_info;
+//     return std::make_tuple(bit_loc, bit_info);
+// }
+// #endif
 
 void print_bit_map(uint64_t* fp_bitmap){
     for(int i = 0 ; i < 16 ; i++){
@@ -308,7 +308,7 @@ task<> Client::sync_dir()
 
 /// @brief 读取远端的Global Depth
 /// @return
-task<uintptr_t> Client::check_gd(uint64_t segloc = -1, bool read_fp = false)
+task<uintptr_t> Client::check_gd(uint64_t segloc, bool read_fp)
 {
     if(segloc!=-1){
         uintptr_t dentry_ptr = seg_rmr.raddr + sizeof(uint64_t) + segloc*sizeof(DirEntry);

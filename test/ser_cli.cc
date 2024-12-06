@@ -7,6 +7,7 @@
 #include "race.h"
 #include "sephash.h"
 #include "sephash_zip.h"
+#include "myhash.h"
 #include "split_batch.h"
 #include "split_hash.h"
 #include "split_hash_idle.h"
@@ -20,8 +21,13 @@
 // #define ALLOW_KEY_OVERLAP
 Config config;
 uint64_t load_num;
+#if MODIFIED
+using ClientType = MYHASH::Client;
+using ServerType = MYHASH::Server;
+#else
 using ClientType = SEPHASH::Client;
 using ServerType = SEPHASH::Server;
+#endif
 using Slice = SEPHASH::Slice;
 
 inline uint64_t GenKey(uint64_t key)
