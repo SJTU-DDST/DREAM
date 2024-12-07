@@ -75,6 +75,8 @@ inline __attribute__((always_inline)) std::tuple<uint64_t, uint64_t> get_fp_bit(
     return std::make_tuple(bit_loc, bit_info);
 }
 #endif
+
+void cal_fpinfo(Slot *main_seg, uint64_t main_seg_len, FpInfo *fp_info);
 // struct Slot
 // {
 //     uint8_t fp : 8;

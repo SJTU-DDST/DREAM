@@ -35,13 +35,13 @@ constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(u
 
 struct Slot
 {
-    uint8_t fp : 8;
+    uint8_t fp; // : 8 removed
     uint8_t len : 3;
     uint8_t sign : 1; // 用来表示split delete信息
     uint8_t dep : 4;
     uint64_t offset : 48;
     uint8_t fp_2;
-    // TODO: sender's local depth
+    uint8_t local_depth;
     operator uint64_t()
     {
         return *(uint64_t *)this;
@@ -64,12 +64,13 @@ struct Slot
         printf("sign:%d\t", sign);
         printf("dep:%02d\t", dep);
         printf("offset:%012lx\t", offset);
+        printf("local_depth:%d\t", local_depth);
         printf("size:%ld\n", sizeof(Slot));
     }
     void print(const std::string &message)
     {
-        printf("%s\t fp:%02x\t fp_2:%02x\t len:%d\t sign:%d\t dep:%02d\t offset:%012lx\t size:%ld\n",
-               message.c_str(), fp, fp_2, len, sign, dep, offset, sizeof(Slot));
+        log_err("%s\t fp:%02x\t fp_2:%02x\t len:%d\t sign:%d\t dep:%02d\t offset:%012lx\t local_depth:%d\t size:%ld\n",
+               message.c_str(), fp, fp_2, len, sign, dep, offset, local_depth, sizeof(Slot));
     }
 } __attribute__((aligned(1)));
 

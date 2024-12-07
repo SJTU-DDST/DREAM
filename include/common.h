@@ -36,8 +36,8 @@
 // 3.1 client conn改为conns OK
 // 3.2 允许client写入非0的segloc，如果发现本地不认识对应srq(conns[segloc]==0)，创建新QP以连接新的SRQ OK
 // 4. INTEGRATED_SLOT_CNT；将slot_cnt嵌入local_depth，这样FAA slot_cnt后可以同时得到local_depth，判断远端是否分裂 OK
-// 5. 判断远端分裂后check_gd，重试写入 TODO:
-// 6. client判断远端分裂后，刚才的写入需要无效化，在Slot中添加4bit的发送方local_depth，如果不一致，合并时丢弃该条目 TODO:
+// 5. 判断远端分裂后check_gd，重试写入 OK
+// 6. client判断远端分裂后，刚才的写入需要无效化，在Slot中添加8bit的发送方local_depth，如果不一致，合并时丢弃该条目 OK
 // 7. 允许用0以外的segloc，如果发现本地的CurSegMeta没有对应的条目，创建新QP以连接新的SRQ OK
 #else
 // SepHash
