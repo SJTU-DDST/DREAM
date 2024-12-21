@@ -33,6 +33,9 @@ struct RAlloc{
             res = (res>>3)<<3; //按八字节对齐
             roffset =  raddr - res;
         }
+        if (roffset > rsize * 0.9) {
+            std::cerr << "Warning: Remote allocator space is running out!" << std::endl;
+        }
         assert(roffset < rsize); // FIXME: 空间可能不够。每次扩容时空间*2，之后如果装得下就原地写入（可能读到部分写入）。 or slab alloc。or 链表 main seg。
         return res;
     }
@@ -69,6 +72,9 @@ struct Alloc{
             offset =  res - start;
         }else{
             offset += size;
+        }
+        if (offset > buf_size * 0.9) {
+            std::cerr << "Warning: Allocator space is running out!" << std::endl;
         }
         assert(offset < buf_size);
         return res;

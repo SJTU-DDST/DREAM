@@ -53,6 +53,8 @@
 #endif
 
 // Config
+#define LOW_MIN_RTR_TIMER 0 // 低延迟模式
+#define CLOSE_SOCKET 1 // 使用后关闭socket，目前只在server关闭
 #define CORO_DEBUG 0 // 协程调试
 #define LARGE_MAIN_SEG 0 // 使用大的main_seg，相当于禁用分裂
 #define ALLOC_CORO_THREAD_SAFE 0

@@ -30,6 +30,12 @@
 #define DEBUG_CORO_DEFINE
 #endif
 
+struct ConnInfo
+{
+    uint8_t is_signal_conn;
+    uint64_t segloc;
+};
+
 constexpr uint64_t SEGMENT_SIZE = 1024;
 constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(uint8_t)));
 
@@ -627,7 +633,9 @@ public:
     ibv_send_wr __exchange_wr;
     ibv_send_wr *exchange_wr{&__exchange_wr};
     std::unordered_map<uint32_t, std::variant<rdma_rmr, std::string>> exchange_idx;
-
+#if CLOSE_SOCKET
+    uint64_t segloc{0};
+#endif
     void send_exchange(uint16_t proto, uint8_t is_signal_conn, uint64_t segloc);
     void handle_recv_setup(const void *buf, size_t len, uint8_t is_signal_conn, uint64_t segloc);
     int modify_qp_to_init();

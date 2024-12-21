@@ -67,6 +67,7 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
     lock_dm->memcpy_to_dm(lock_dm, 0, tmp, dev_mem_size);
     log_err("memset, any key to exit");
 
+#if 1
     auto wait_exit = [&]()
     {
         std::cin.get(); // 等待用户输入
@@ -77,6 +78,13 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
     // ser.start_serve();
     ser.start_serve(nullptr, 1, zero_qp_cap, rdma_default_tempmp_size, rdma_default_max_coros, rdma_default_cq_size, rdma_default_port, dir);
     th.join();
+#else
+    ser.start_serve(nullptr, 1, zero_qp_cap, rdma_default_tempmp_size, rdma_default_max_coros, rdma_default_cq_size, rdma_default_port, dir);
+
+    log_err("start clients with run.py");
+    int result = system("python3 ../run.py 1 client 8 1");
+    log_err("run.py completed with result: %d", result);
+#endif
 }
 
 void Server::Init()

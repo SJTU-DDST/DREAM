@@ -662,6 +662,10 @@ void rdma_worker::worker_loop()
             //     recv_count++;
             // }
             if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+                struct ibv_sge sge;
+                struct ibv_recv_wr wr;
+                ibv_recv_wr *bad;
+
                 uint32_t segloc = ntohl(wc.imm_data);
                 std::bitset<32> segloc_bits(segloc);
                 bool split_ok = segloc_bits.test(31);
@@ -695,42 +699,20 @@ void rdma_worker::worker_loop()
                         assert_require(srqs[segloc]);
                         continue;
                     }
-                    
                     for (int i = 0; i < SLOT_PER_SEG; i++)
                     {
-                        Slot *slot = &cur_seg->slots[i];
-                        auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
-                        assert_check(sge);
-                        auto recv_wr = (ibv_recv_wr *)wr;
-                        fill_recv_wr(recv_wr, (ibv_sge *)sge, slot, sizeof(Slot), lkey());
-                        recv_wr->wr_id = wr_wo_await;
-                        ibv_recv_wr *bad;
-                        
-                        
-                        assert_check(0 == ibv_post_srq_recv(srqs[segloc], recv_wr, &bad)); // TODO: conn发布
-                        
-                        free_buf(sge);
+                        fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), lkey());
+                        wr.wr_id = wr_wo_await;
+                        assert_check(0 == ibv_post_srq_recv(srqs[segloc], &wr, &bad)); // TODO: conn发布
                     }
                     if (segloc)
                         log_test("收到IMM，为segloc:%u,SRQ:%p发布%d个RECV, qp_num: %u", segloc, cur_seg->seg_meta.srq, SLOT_PER_SEG, wc.qp_num);
                 }
-                auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_recv_wr));
-                assert_check(sge);
-                auto recv_wr = (ibv_recv_wr *)wr;
-                CurSeg *seg = reinterpret_cast<CurSeg *>(dir->segs[0].cur_seg_ptr);
-                Slot *temp_slot = &seg->slots[0]; // 只用于接收RDMA_WRITE_IMM的imm_data，不会被写入
-
-                fill_recv_wr(recv_wr, (ibv_sge *)sge, temp_slot, sizeof(Slot), lkey()); // 象征性加上sizeof(Slot)，必须是合法地址不能是nullptr？
-                recv_wr->wr_id = wr_wo_await;
-                ibv_recv_wr *bad;
                 if (signal_srq) {
-                    assert_check(0 == ibv_post_srq_recv(signal_srq, recv_wr, &bad));
-                    // log_err("收到IMM,为signal_srq发布RECV, ptr: %p, srq: %p, len: %lu, "
-                    //         "lkey: %lu",
-                    //         recv_wr->sg_list->addr, signal_srq,
-                    //         recv_wr->sg_list->length, recv_wr->sg_list->lkey);
+                    fill_recv_wr(&wr, &sge, reinterpret_cast<CurSeg *>(dir->segs[0].cur_seg_ptr)->slots, sizeof(Slot), lkey()); // 象征性加上sizeof(Slot)，必须是合法地址不能是nullptr？
+                    wr.wr_id = wr_wo_await;
+                    assert_check(0 == ibv_post_srq_recv(signal_srq, &wr, &bad));
                 }
-                free_buf(sge);
 #endif
                 continue;
             }
@@ -863,11 +845,11 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
         {
             if (select_list.select())
             {
-                auto &sks = select_list.sks;
-                size_t sk_num = sks.size();
+                // auto &sks = select_list.sks;
+                size_t sk_num = select_list.sks.size();
                 for (size_t i = 0; i < sk_num; ++i)
                 {
-                    int sk = sks[i];
+                    int sk = select_list.sks[i];
                     if (!select_list.isset(sk))
                         continue;
                     if (sk == listenfd)
@@ -880,27 +862,36 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                         uint64_t segloc = 0;
 #if RDMA_SIGNAL
                         // 接收 is_signal_conn 和 segloc
-                        assert_require(recv(accepted_sock, &is_signal_conn, sizeof(is_signal_conn), 0) == sizeof(is_signal_conn));
-                        assert_require(recv(accepted_sock, &segloc, sizeof(segloc), 0) == sizeof(segloc));
-                        log_test("socket接收到is_signal_conn: %d, segloc: %lu", is_signal_conn, segloc);
+                        ConnInfo conn_info;
+                        ssize_t recv_size = recv(accepted_sock, &conn_info, sizeof(conn_info), 0);
+                        if (recv_size != sizeof(conn_info))
+                        {
+                            log_err("收到错误的conn_info大小: %ld", recv_size); // FIXME: recv_size=0
+                        }
+                        assert_require(recv_size == sizeof(conn_info));
+                        // log_err("socket接收到is_signal_conn: %d, segloc: %lu", conn_info.is_signal_conn, conn_info.segloc);
+                        assert_require(conn_info.segloc < 100000);
 #endif
                         auto worker = workers[accepted_sock % worker_num];
-                        auto conn = new rdma_conn(worker, accepted_sock, is_signal_conn, segloc); // IMPORTANT: 服务器创建QP
+                        auto conn = new rdma_conn(worker, accepted_sock, conn_info.is_signal_conn, conn_info.segloc); // IMPORTANT: 服务器创建QP
                         assert_require(conn);
-                        worker->_max_segloc = std::max(worker->_max_segloc, segloc);
+                        worker->_max_segloc = std::max(worker->_max_segloc, conn_info.segloc);
                         sk2conn[accepted_sock] = conn;
 #if RDMA_SIGNAL
-                        log_test("创建qp_num: %d, 使用signal_srq: %d, is_signal_conn: %d, segloc: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, is_signal_conn, segloc);
+                        log_test("创建qp_num: %d, 使用signal_srq: %d, is_signal_conn: %d, segloc: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, conn_info.is_signal_conn, conn_info.segloc);
 #endif
                     }
                     else
                     {
                         auto conn = sk2conn[sk];
-                        log_info("sock event");
+                        // log_err("sock event: %d", sk);
                         auto recv_len = ::recv(sk, recv_buf, rdma_sock_recv_buf_size, 0);
                         if (recv_len <= 0)
                         {
-                            delete conn;
+// #if CLOSE_SOCKET
+//                             if (!conn->segloc)
+// #endif
+                                delete conn;
                             sk2conn.erase(sk);
                             close(sk);
                             select_list.del(sk);
@@ -948,6 +939,12 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                             case rdma_exchange_proto_ready:
                                 if (handler)
                                     workers[sk % worker_num]->pending_tasks->enqueue(handler(conn));
+#if CLOSE_SOCKET
+                                sk2conn.erase(sk);
+                                close(sk);
+                                select_list.del(sk);
+                                conn->sock = -1;
+#endif
                                 break;
 
                             default:
@@ -996,8 +993,8 @@ rdma_conn *rdma_worker::connect(const char *host, int port, uint8_t is_signal_co
 
 #if RDMA_SIGNAL
     // 发送 is_signal_conn 和 segloc
-    assert_require(send(sock, &is_signal_conn, sizeof(is_signal_conn), 0) == sizeof(is_signal_conn));
-    assert_require(send(sock, &segloc, sizeof(segloc), 0) == sizeof(segloc));
+    ConnInfo conn_info = {is_signal_conn, segloc};
+    assert_require(send(sock, &conn_info, sizeof(conn_info), 0) == sizeof(conn_info));
 #endif
 
     auto conn = new rdma_conn(this, sock, is_signal_conn, segloc); // IMPORTANT: 客户端创建QP
@@ -1013,11 +1010,21 @@ rdma_conn *rdma_worker::connect(const char *host, int port, uint8_t is_signal_co
         ;
 
     log_info("connect success");
+// #if CLOSE_SOCKET
+//     if (segloc > 0)
+//     {
+//         close(sock);
+//         conn->sock = -1;
+//     }
+// #endif
     return conn;
 }
 
 rdma_conn::rdma_conn(rdma_worker *w, int _sock, uint8_t is_signal_conn, uint64_t segloc)
     : dev(w->dev), worker(w), sock(_sock), conn_id(dev.alloc_conn_id())
+// #if CLOSE_SOCKET
+//       , segloc(segloc)
+// #endif
 {
     {
         struct ibv_qp_init_attr qp_init_attr;
@@ -1195,8 +1202,13 @@ int rdma_conn::modify_qp_to_rtr(uint32_t rqp_num, uint16_t rlid, const ibv_gid *
 
 int rdma_conn::modify_qp_to_rts()
 {
+#if LOW_MIN_RTR_TIMER
     const int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
                       IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+#else
+    const int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
+                      IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC; // | IBV_QP_MIN_RNR_TIMER;
+#endif
     struct ibv_qp_attr attr;
     int rc;
     memset(&attr, 0, sizeof(attr));
@@ -1204,7 +1216,9 @@ int rdma_conn::modify_qp_to_rts()
     attr.timeout = 14;
     attr.retry_cnt = 7;
     attr.rnr_retry = 7; // 值 7 是特殊的，指定在 RNR 的情况下重试无限次
+#if LOW_MIN_RTR_TIMER
     attr.min_rnr_timer = 3; // 降低延迟。在开发过程中，最好将 attr.retry_cnt 和 attr.rnr_retry 设置为 0。
+#endif
     attr.sq_psn = 0;
     attr.max_rd_atomic = rdma_max_rd_atomic; // FOR READ
     if ((rc = ibv_modify_qp(qp, &attr, flags)))

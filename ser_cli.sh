@@ -9,11 +9,15 @@
 if [ "$1" = "server" ]
 then
     echo "server"
+    cd /home/congyong/SepHash/build && bash ../sync.sh out 1 && \
     # ./ser_cli_var_kv --server \
     ./ser_cli --server \
     --gid_idx 1 \
     --max_coro 256 --cq_size 64 \
-    --mem_size 9126805504 #0
+    --mem_size 61268055040 #91268055040
+
+    bash ../sync.sh in 1
+    grep -H . ./out*.txt
 else
     echo "machine" $1
 
@@ -28,7 +32,7 @@ else
                 --max_coro 256 --cq_size 64 \
                 --machine_id $1  \
                 --load_num $load_num \
-                --num_op 100000 \
+                --num_op 10000000 \
                 --pattern_type 0 \
                 --insert_frac 1.0 \
                 --read_frac   0.0 \
@@ -39,6 +43,11 @@ else
         done
     done
 fi
+
+# At server: bash ../ser_cli.sh server
+# Wait server ok: python3 ../run.py 1 client 8 1
+# 目前myhash如果num_op 10M可能崩溃，可能是因为太多请求在重试。可能要先调大间隔，后续细粒度合并
+# 1M不崩溃，但IOPS开始下降到400？SepHash是270
 
 # load_num 10000000
 # num_op 1000000
