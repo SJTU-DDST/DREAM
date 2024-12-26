@@ -221,8 +221,8 @@ int main(int argc, char *argv[])
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
             // log_err("创建第%lu个client, tempmp_size:%lu, max_coro:%lu, cq_size:%lu", i, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-#if MODIFIED
             rdma_clis[i] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
+#if MODIFIED
             rdma_conns[i][0] = rdma_clis[i]->connect(config.server_ip.c_str());
             for (uint64_t j = 1; j < (1 << SEPHASH::INIT_DEPTH); j++) {
                 rdma_conns[i][j] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, 0, j);
@@ -233,7 +233,6 @@ int main(int argc, char *argv[])
             rdma_signal_conn = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, 1);
 #endif
 #else
-            rdma_clis[i] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
             rdma_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
             assert(rdma_conns[i] != nullptr);
             rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());

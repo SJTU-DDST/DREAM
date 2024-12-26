@@ -410,9 +410,7 @@ public:
      */
     rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_cap = so_qp_cap, int tempmp_size = rdma_default_tempmp_size,
                 int max_coros = rdma_default_max_coros, int cq_size = rdma_default_cq_size,
-                Directory *_dir = nullptr, ibv_cq *existing_cq = nullptr,
-                std::shared_ptr<std::vector<rdma_coro>> existing_coros = nullptr,
-                std::shared_ptr<uint32_t> existing_free_head = nullptr);
+                Directory *_dir = nullptr);
     ~rdma_worker();
     inline void *alloc_buf(size_t size) { return mp->alloc(size); }
     template <is_integral... Ts>

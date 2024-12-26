@@ -350,11 +350,8 @@ std::tuple<doca_mmap *, void *> rdma_dev::reg_mmap(uint32_t mmap_id, size_t len,
 
 rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
                          int tempmp_size, int _max_coros, int cq_size,
-                         Directory *_dir, ibv_cq *existing_cq,
-                         std::shared_ptr<std::vector<rdma_coro>> existing_coros,
-                         std::shared_ptr<uint32_t> existing_free_head)
-    : dev(_dev), qp_cap(_qp_cap), max_coros(_max_coros), dir(_dir),
-      cq(existing_cq), coros(existing_coros), free_head(existing_free_head)
+                         Directory *_dir)
+    : dev(_dev), qp_cap(_qp_cap), max_coros(_max_coros), dir(_dir)
 {
     // log_err("rdma_worker init start, tempmp_size: %d, max_coros: %d, cq_size: %d, max_send_wr: %d, max_recv_wr: %d", tempmp_size, max_coros, cq_size, qp_cap.max_send_wr, qp_cap.max_recv_wr);
     // server: max_send_wr: 0, max_recv_wr: 0
@@ -401,13 +398,12 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
     }
     // else log_err("cq: %p已经存在，不需要创建", cq);
     if (qp_cap.max_recv_wr) {
-        assert_require(srqs[0] = dev.create_srq(cq_size));
-        assert_require(dir);// 此时dir还没初始化
+        assert_require(dir);
         CurSeg *cur_seg = reinterpret_cast<CurSeg *>(dir->segs[0].cur_seg_ptr);
 #if RDMA_SIGNAL
         assert_require(signal_srq = dev.create_srq(cq_size));
 #endif
-        // log_err("是server，创建SRQ和signal_srq, cq_size: %d", cq_size);
+        log_err("是server，创建signal_srq, cq_size: %d", cq_size);
     } // else log_err("是client，不创建SRQ");
     if (qp_cap.max_recv_wr > 0)
         assert_require(pending_tasks = new task_ring());
@@ -667,47 +663,18 @@ void rdma_worker::worker_loop()
                 ibv_recv_wr *bad;
 
                 uint32_t segloc = ntohl(wc.imm_data);
-                std::bitset<32> segloc_bits(segloc);
-                bool split_ok = segloc_bits.test(31);
-                segloc_bits.reset(31);
-                segloc = segloc_bits.to_ulong();
-
                 // log_err("接收到RDMA_WITH_IMM, imm_data: %lu, ntohl: %lu, qp_num: %d", wc.imm_data, ntohl(wc.imm_data), wc.qp_num);
                 CurSeg *cur_seg = reinterpret_cast<CurSeg *>(this->dir->segs[segloc].cur_seg_ptr);
                 // cur_seg->seg_meta.print("before:");
 #if RDMA_SIGNAL
-                if (split_ok)
+                assert_require(segloc < srqs.size() && srqs[segloc])
+                for (int i = 0; i < SLOT_PER_SEG; i++)
                 {
-                    log_test("接收到SPLIT_OK信号，准备创建新的SRQ，但不会马上post RECV, indice: %u", segloc);
-
-                    // cur_seg->seg_meta.print("before:");
-                    if (segloc >= srqs.size())
-                        srqs.resize(segloc + 1, nullptr);
-                    if (!srqs[segloc])
-                    {
-                        assert_require(srqs[segloc] = dev.create_srq(rdma_default_cq_size));
-                        // log_err("分裂后为segloc: %u创建新的SRQ: %p", segloc, srqs[segloc]);
-                    } // else log_test("分裂后为segloc: %u使用之前的SRQ: %p", segloc, srqs[segloc]);
-                    // 分裂后不需要为new segment发布RECV，等待第一次连接时发布
-                    // 分裂后需要为old segment发布RECV，会额外发起一次write with imm
+                    fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), lkey());
+                    wr.wr_id = wr_wo_await;
+                    assert_check(0 == ibv_post_srq_recv(srqs[segloc], &wr, &bad));
                 }
-                else
-                {
-                    if (segloc >= srqs.size() || !srqs[segloc])
-                    {
-                        log_err("收到IMM，但SRQ不存在，segloc: %u, SRQ: %p", segloc, srqs[segloc]);
-                        assert_require(srqs[segloc]);
-                        continue;
-                    }
-                    for (int i = 0; i < SLOT_PER_SEG; i++)
-                    {
-                        fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), lkey());
-                        wr.wr_id = wr_wo_await;
-                        assert_check(0 == ibv_post_srq_recv(srqs[segloc], &wr, &bad)); // TODO: conn发布
-                    }
-                    if (segloc)
-                        log_test("收到IMM，为segloc:%u,SRQ:%p发布%d个RECV, qp_num: %u", segloc, cur_seg->seg_meta.srq, SLOT_PER_SEG, wc.qp_num);
-                }
+                log_test("收到IMM，为srqs[%u]:%p发布%d个RECV, qp_num: %u", segloc, srqs[segloc], SLOT_PER_SEG, wc.qp_num);
                 if (signal_srq) {
                     fill_recv_wr(&wr, &sge, reinterpret_cast<CurSeg *>(dir->segs[0].cur_seg_ptr)->slots, sizeof(Slot), lkey()); // 象征性加上sizeof(Slot)，必须是合法地址不能是nullptr？
                     wr.wr_id = wr_wo_await;
@@ -869,11 +836,11 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                         assert_require(conn_info.segloc < 100000);
 #endif
                         auto worker = workers[accepted_sock % worker_num];
-                        auto conn = new rdma_conn(worker, accepted_sock); // IMPORTANT: 服务器创建QP
+                        auto conn = new rdma_conn(worker, accepted_sock, conn_info.is_signal_conn, conn_info.segloc); // IMPORTANT: 服务器创建QP
                         assert_require(conn);
                         sk2conn[accepted_sock] = conn;
 #if RDMA_SIGNAL
-                        log_test("创建qp_num: %d, 使用signal_srq: %d, is_signal_conn: %d, segloc: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, conn_info.is_signal_conn, conn_info.segloc);
+                        log_test("创建qp_num: %d, 是否使用signal_srq: %d, is_signal_conn: %d, segloc: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, conn_info.is_signal_conn, conn_info.segloc);
 #endif
                     }
                     else
@@ -912,10 +879,7 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                                         conn->pure_recv(temp_slot, sizeof(Slot), conn->worker->lkey());
                                     }
 #if RDMA_SIGNAL
-                                    log_test("第一次为普通SRQ发布%d个RECV, qp_num: "
-                                            "%d, srq: %p", SLOT_PER_SEG,
-                                            conn->qp->qp_num,
-                                            conn->qp->srq);
+                                    log_test("第一次为普通SRQ发布%d个RECV, qp_num: %d, srq: %p", SLOT_PER_SEG, conn->qp->qp_num, conn->qp->srq);
 #endif
                                 }
 #if RDMA_SIGNAL
@@ -926,7 +890,7 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                                     Slot *temp_slot = &seg->slots[0]; // 只用于接收RDMA_WRITE_IMM的imm_data，不会被写入
                                     for (int i = 0; i < SLOT_PER_SEG; i++)
                                         conn->pure_recv(temp_slot, sizeof(Slot), conn->worker->lkey()); // 象征性加上sizeof(Slot), 必须是合法地址不能是nullptr？
-                                    log_err("第一次为signal_srq发布RECV, qp_num: %d, 使用signal_srq: %d", conn->qp->qp_num, conn->qp->srq == conn->worker->signal_srq);
+                                    log_test("第一次为signal_srq发布RECV, qp_num: %d, 使用signal_srq: %d", conn->qp->qp_num, conn->qp->srq == conn->worker->signal_srq);
                                 }
 #endif
                                 break;
@@ -1029,26 +993,18 @@ rdma_conn::rdma_conn(rdma_worker *w, int _sock, uint8_t is_signal_conn, uint64_t
         qp_init_attr.send_cq = worker->cq;
         qp_init_attr.recv_cq = worker->cq;
 
-        if (!segloc) // 此时worker->dir还没初始化
-        {
-            if (worker->srqs.size() > 0 && worker->srqs[0])
-            {
-                qp_init_attr.srq = worker->srqs[0];
 #if RDMA_SIGNAL
-                if (is_signal_conn)
-                    qp_init_attr.srq = worker->signal_srq;
+        if (is_signal_conn)
+            qp_init_attr.srq = worker->signal_srq;
 #endif
-            }
-        }
         else
         {
-            // assert_require(worker->dir); // server必须设置dir
-            if (worker->dir) {
+            if (worker->dir) { // server
                 if (segloc >= worker->srqs.size())
                     worker->srqs.resize(segloc + 1, nullptr);
                 if (!worker->srqs[segloc]) {
-                    assert_require(worker->srqs[segloc] = dev.create_srq(rdma_default_cq_size));
-                    // log_err("连接时为segloc: %lu创建新的SRQ: %p", segloc, worker->srqs[segloc]);
+                    assert_require(worker->srqs[segloc] = dev.create_srq(rdma_default_cq_size)); // 单线程，不需要加锁
+                    log_err("连接时为segloc: %lu创建新的SRQ: %p", segloc, worker->srqs[segloc]);
                 } // else log_err("连接时为segloc: %lu使用之前的SRQ: %p", segloc, worker->srqs[segloc]);
                 qp_init_attr.srq = worker->srqs[segloc];
             }

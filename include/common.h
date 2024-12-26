@@ -24,7 +24,7 @@
 #include <condition_variable>
 #include <mutex>
 
-#define MODIFIED 0
+#define MODIFIED 1
 #if MODIFIED
 // Modified
 #define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
