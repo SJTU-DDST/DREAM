@@ -96,6 +96,7 @@
     "queue": "cpp",
     "stack": "cpp",
     "source_location": "cpp",
-    "text_encoding": "cpp"
+    "text_encoding": "cpp",
+    "filesystem": "cpp"
   }
 }

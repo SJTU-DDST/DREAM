@@ -42,12 +42,13 @@ const ibv_qp_cap zero_qp_cap = {
 
 struct sock_select_list
 {
+    std::vector<int> sks;
+
     int maxfd{0};
     int timeout_us;
     bool dirty{false};
     timeval timeout{.tv_sec = 0, .tv_usec = 0};
     fd_set fds;
-    std::vector<int> sks;
 
     sock_select_list(int _timeout_us) : timeout_us(_timeout_us) {}
     void add(int sk)
@@ -87,6 +88,10 @@ struct sock_select_list
         std::ranges::for_each(sks, [this](int sk)
                               { FD_SET(sk, &fds); });
         int ready_num = ::select(maxfd + 1, &fds, nullptr, nullptr, &timeout);
+        if (ready_num < 0)
+        {
+            log_err("select failed with error: %s", strerror(errno));
+        }
         assert_require(ready_num >= 0);
         return ready_num;
     }
@@ -397,14 +402,12 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
         // log_err("创建CQ: %p, cq_size: %d", cq, cq_size); // server: 1024, client: 64
     }
     // else log_err("cq: %p已经存在，不需要创建", cq);
-    if (qp_cap.max_recv_wr) {
-        assert_require(dir);
-        CurSeg *cur_seg = reinterpret_cast<CurSeg *>(dir->segs[0].cur_seg_ptr);
 #if RDMA_SIGNAL
+    if (qp_cap.max_recv_wr) { // server
         assert_require(signal_srq = dev.create_srq(cq_size));
-#endif
-        log_err("是server，创建signal_srq, cq_size: %d", cq_size);
+        log_err("是server，创建signal_srq, cq_size: %d", cq_size);        
     } // else log_err("是client，不创建SRQ");
+#endif
     if (qp_cap.max_recv_wr > 0)
         assert_require(pending_tasks = new task_ring());
     assert_require(yield_handler = new handle_ring(max_coros));
@@ -825,9 +828,9 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                         assert_require(accepted_sock > 0);
                         select_list.add(accepted_sock);
                         log_info("accept conn: %d", accepted_sock);
+                        ConnInfo conn_info = {0, 0};
 #if RDMA_SIGNAL
                         // 接收 is_signal_conn 和 segloc
-                        ConnInfo conn_info;
                         size_t recv_len = 0;
                         while ((recv_len += recv(accepted_sock, &conn_info + recv_len, sizeof(conn_info) - recv_len, 0)) < sizeof(conn_info))
                             ;
@@ -996,8 +999,8 @@ rdma_conn::rdma_conn(rdma_worker *w, int _sock, uint8_t is_signal_conn, uint64_t
 #if RDMA_SIGNAL
         if (is_signal_conn)
             qp_init_attr.srq = worker->signal_srq;
-#endif
         else
+#endif
         {
             if (worker->dir) { // server
                 if (segloc >= worker->srqs.size())

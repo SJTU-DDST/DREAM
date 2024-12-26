@@ -71,6 +71,7 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
     auto wait_exit = [&]()
     {
         std::cin.get(); // 等待用户输入
+        ser.stop_serve();
         log_err("Exiting...");
     };
     std::thread th(wait_exit);
@@ -111,14 +112,8 @@ Server::~Server()
     rdma_free_dmmr({lock_dm, lock_mr});
 }
 
-#if RDMA_SIGNAL
-Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn, rdma_conn *_signal_conn,
-                uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id)
-#else
 Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn,
-                uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id)
-#endif
-: config(config)
+                uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id): config(config)
 {
     // id info
     machine_id = _machine_id;
@@ -130,9 +125,6 @@ Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn
     // conn = _conn;
     conns[0] = _conn;
     wo_wait_conn = _wowait_conn;
-#if RDMA_SIGNAL
-    signal_conn = _signal_conn;
-#endif
     lmr = _lmr;
 
     perf.init();
@@ -944,11 +936,11 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
         std::bitset<32> new_segloc_bits((uint32_t)first_new_seg_loc); // new_seg_indices[0]
         new_segloc_bits.set(31);
         log_merge("准备向远端地址%lx写入1，提醒创建新的Segment的SRQ", seg_ptr + sizeof(uint64_t));
-        signal_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, new_segloc_bits.to_ulong()); // 象征性写slots[0]
+        wo_wait_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, new_segloc_bits.to_ulong()); // 象征性写slots[0]
         log_merge("提醒创建segloc:%lu encoded:%lu htonl:%lu新的Segment的SRQ完成, main_seg_ptr:%lx, main_seg_len:%lu", first_new_seg_loc, new_segloc_bits.to_ulong(), htonl(new_segloc_bits.to_ulong()), new_main_ptr2, off2);
         
         log_merge("向远端地址%lx写入1，提醒为旧Segment发布RECV", seg_ptr + sizeof(uint64_t));
-        signal_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, first_original_seg_loc); // 象征性写slots[0]
+        wo_wait_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, first_original_seg_loc); // 象征性写slots[0]
         log_merge("提醒为segloc:%lu htonl:%lu旧的Segment发布RECV完成, main_seg_ptr:%lx, main_seg_len:%lu", first_original_seg_loc, htonl(first_original_seg_loc) , new_main_ptr1, off1);
 #else
         co_await wo_wait_conn->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey);
@@ -1010,7 +1002,7 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
     cur_seg->seg_meta.slot_cnt = 0;
 #if MODIFIED
     log_merge("segloc:%lu合并了，准备向远端地址%lx写入1，提醒为旧Segment发布RECV", seg_loc, seg_ptr + sizeof(uint64_t));
-    signal_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey, seg_loc); // 为旧Segment发布RECV，此处的WRITE和上面的相同，无实际作用，只是为了触发信号
+    wo_wait_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey, seg_loc); // 为旧Segment发布RECV，此处的WRITE和上面的相同，无实际作用，只是为了触发信号
     log_merge("合并后提醒为segloc:%lu旧Segment发布RECV完成，main_seg_ptr:%lx,main_seg_len:%lu", seg_loc, new_main_ptr, new_main_len);
 #else
     co_await wo_wait_conn->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t),lmr->lkey);

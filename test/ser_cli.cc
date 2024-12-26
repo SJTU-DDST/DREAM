@@ -215,9 +215,6 @@ int main(int argc, char *argv[])
         std::mutex dir_lock;
         std::vector<BasicDB *> clis;
         std::thread ths[80];
-#if RDMA_SIGNAL
-        rdma_conn *rdma_signal_conn = nullptr;
-#endif
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
             // log_err("创建第%lu个client, tempmp_size:%lu, max_coro:%lu, cq_size:%lu", i, rdma_default_tempmp_size, config.max_coro, config.cq_size);
@@ -228,34 +225,19 @@ int main(int argc, char *argv[])
                 rdma_conns[i][j] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, 0, j);
                 assert(rdma_conns[i][j] != nullptr);
             }
-            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
-#if RDMA_SIGNAL
-            rdma_signal_conn = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, 1);
-#endif
 #else
             rdma_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
             assert(rdma_conns[i] != nullptr);
-            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
-#if RDMA_SIGNAL
-            rdma_signal_conn = rdma_clis[0]->connect(config.server_ip.c_str(), rdma_default_port, 1);
 #endif
-#endif
+            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, 1); // use wowait conn for signal
             assert(rdma_wowait_conns[i] != nullptr);
-#if RDMA_SIGNAL
-            assert(rdma_signal_conn != nullptr);
-#endif
             for (uint64_t j = 0; j < config.num_coro; j++)
             {
                 lmrs[i * config.num_coro + j] =
                     dev.create_mr(cbuf_size, mem_buf + cbuf_size * (i * config.num_coro + j));
                 BasicDB *cli;
-#if RDMA_SIGNAL
-                cli = new ClientType(config, lmrs[i * config.num_coro + j], rdma_clis[i], rdma_conns[i],
-                                     rdma_wowait_conns[i], rdma_signal_conn, config.machine_id, i, j);
-#else
                 cli = new ClientType(config, lmrs[i * config.num_coro + j], rdma_clis[i], rdma_conns[i],
                                      rdma_wowait_conns[i], config.machine_id, i, j);
-#endif
                 clis.push_back(cli);
             }
         }
@@ -422,8 +404,5 @@ int main(int argc, char *argv[])
 #endif
             delete rdma_clis[i];
         }
-#if RDMA_SIGNAL
-        delete rdma_signal_conn;
-#endif
     }
 }

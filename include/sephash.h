@@ -232,13 +232,8 @@ struct SlotOffset
 class Client : public BasicDB
 {
   public:
-#if RDMA_SIGNAL
-    Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn, rdma_conn *_signal_conn,
-           uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id);
-#else
     Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn,
            uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id);
-#endif
 
     Client(const Client &) = delete;
 
@@ -270,9 +265,6 @@ class Client : public BasicDB
     rdma_client *cli;
     std::vector<rdma_conn *> conns{nullptr}; // conns[0]是初始化时外部传进来的conn，其他的是在get_conn中动态创建的
     rdma_conn *wo_wait_conn;
-#if RDMA_SIGNAL
-    rdma_conn *signal_conn;
-#endif
     rdma_rmr seg_rmr;
     struct ibv_mr *lmr;
 
