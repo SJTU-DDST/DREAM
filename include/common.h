@@ -24,7 +24,7 @@
 #include <condition_variable>
 #include <mutex>
 
-#define MODIFIED 1
+#define MODIFIED 0
 #if MODIFIED
 // Modified
 #define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
@@ -55,7 +55,7 @@
 // Config
 #define LOW_MIN_RTR_TIMER 0 // 低延迟模式
 #define CLOSE_SOCKET 1 // 使用后关闭socket，目前只在server关闭
-#define CORO_DEBUG 0 // 协程调试
+#define CORO_DEBUG 1 // 协程调试
 #define LARGE_MAIN_SEG 0 // 使用大的main_seg，相当于禁用分裂
 #define ALLOC_CORO_THREAD_SAFE 0
 // #define INTEGRATED_SLOT_CNT 1 // 将 local_depth 和 slot_cnt 合并到一个 uint64_t 类型的位域中。

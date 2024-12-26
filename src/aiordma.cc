@@ -100,7 +100,7 @@ enum
     rdma_exchange_proto_ready,
 };
 
-struct __rdma_exchange_t // TODO: 这里加上seg id
+struct __rdma_exchange_t
 {
     uint16_t proto;
     uint16_t lid;
@@ -430,13 +430,13 @@ rdma_worker::~rdma_worker()
     cq = nullptr;
 
     // log_err("准备销毁%d个SRQ", srqs.size());
-    for (int i = 0; i < srqs.size(); ++i)
+    for (auto &srq : srqs)
     {
-        if (srqs[i] && ibv_destroy_srq(srqs[i]))
+        if (srq && ibv_destroy_srq(srq))
+        {
             log_warn("failed to destroy srq");
-        // else if (srqs[i]) log_err("成功销毁SRQ %p", srqs[i]);
-        // else log_err("srq: %p已经销毁/未申请", srqs[i]);
-        srqs[i] = nullptr;
+        }
+        srq = nullptr;
     }
 #if RDMA_SIGNAL
     if (signal_srq && ibv_destroy_srq(signal_srq))
@@ -525,7 +525,7 @@ void rdma_worker::print_running_coros()
         if (cor->ctx != 0)
         {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cor->start_time).count();
-            if (elapsed >= 100)
+            if (elapsed >= 10)
             {
                 log_err("终止超时coro ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed);
                 cor->coro_state |= (coro_state_error | coro_state_ready);
@@ -858,24 +858,19 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                         assert_require(accepted_sock > 0);
                         select_list.add(accepted_sock);
                         log_info("accept conn: %d", accepted_sock);
-                        uint8_t is_signal_conn = 0;
-                        uint64_t segloc = 0;
 #if RDMA_SIGNAL
                         // 接收 is_signal_conn 和 segloc
                         ConnInfo conn_info;
-                        ssize_t recv_size = recv(accepted_sock, &conn_info, sizeof(conn_info), 0);
-                        if (recv_size != sizeof(conn_info))
-                        {
-                            log_err("收到错误的conn_info大小: %ld", recv_size); // FIXME: recv_size=0
-                        }
-                        assert_require(recv_size == sizeof(conn_info));
+                        size_t recv_len = 0;
+                        while ((recv_len += recv(accepted_sock, &conn_info + recv_len, sizeof(conn_info) - recv_len, 0)) < sizeof(conn_info))
+                            ;
+                        assert_require(recv_len == sizeof(conn_info));
                         // log_err("socket接收到is_signal_conn: %d, segloc: %lu", conn_info.is_signal_conn, conn_info.segloc);
                         assert_require(conn_info.segloc < 100000);
 #endif
                         auto worker = workers[accepted_sock % worker_num];
-                        auto conn = new rdma_conn(worker, accepted_sock, conn_info.is_signal_conn, conn_info.segloc); // IMPORTANT: 服务器创建QP
+                        auto conn = new rdma_conn(worker, accepted_sock); // IMPORTANT: 服务器创建QP
                         assert_require(conn);
-                        worker->_max_segloc = std::max(worker->_max_segloc, conn_info.segloc);
                         sk2conn[accepted_sock] = conn;
 #if RDMA_SIGNAL
                         log_test("创建qp_num: %d, 使用signal_srq: %d, is_signal_conn: %d, segloc: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, conn_info.is_signal_conn, conn_info.segloc);

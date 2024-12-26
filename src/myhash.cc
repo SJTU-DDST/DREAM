@@ -69,14 +69,12 @@ namespace MYHASH
         log_test("[%lu:%lu]开始第%d次SEND slot segloc:%lu", cli_id, coro_id, send_cnt + 1, segloc);
         if (segloc >= conns.size())
         {
-            clis.resize(segloc + 1, nullptr);
             conns.resize(segloc + 1, nullptr);
         }
         if (!conns[segloc])
         {
             co_await check_gd(segloc);                                                                                                                                                    // 先更新对应&dir->segs[segloc]
-            clis[segloc] = new rdma_client(clis[0]->dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size, nullptr, clis[0]->cq, clis[0]->coros, clis[0]->free_head); // 复用clis[0]的cq和coros, free_head
-            conns[segloc] = clis[segloc]->connect(config.server_ip.c_str(), rdma_default_port, 0, segloc);                                                                                // 一个cli只能有一个cli->conn，需要新建cli
+            conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, 0, segloc);                                                                                // 一个cli只能有一个cli->conn，需要新建cli
             assert(conns[segloc] != nullptr);
         }
         perf.start_perf();
@@ -363,15 +361,16 @@ namespace MYHASH
 
             // 4.4 Change Sign (Equal to unlock this segment)
             cur_seg->seg_meta.sign = !cur_seg->seg_meta.sign;
+            cur_seg->seg_meta.slot_cnt = 0;
 #if MODIFIED
             std::bitset<32> new_segloc_bits((uint32_t)first_new_seg_loc); // new_seg_indices[0]
             new_segloc_bits.set(31);
             log_merge("准备向远端地址%lx写入1，提醒创建新的Segment的SRQ", seg_ptr + sizeof(uint64_t));
-            signal_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, new_segloc_bits.to_ulong()); // 象征性写slots[0]
+            signal_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey, new_segloc_bits.to_ulong());
             log_merge("提醒创建segloc:%lu encoded:%lu htonl:%lu新的Segment的SRQ完成, main_seg_ptr:%lx, main_seg_len:%lu", first_new_seg_loc, new_segloc_bits.to_ulong(), htonl(new_segloc_bits.to_ulong()), new_main_ptr2, off2);
 
             log_merge("向远端地址%lx写入1，提醒为旧Segment发布RECV", seg_ptr + sizeof(uint64_t));
-            signal_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, first_original_seg_loc); // 象征性写slots[0]
+            signal_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey, first_original_seg_loc); // 为旧Segment发布RECV，此处的WRITE和上面的相同，无实际作用，只是为了触发信号
             log_merge("提醒为segloc:%lu htonl:%lu旧的Segment发布RECV完成, main_seg_ptr:%lx, main_seg_len:%lu", first_original_seg_loc, htonl(first_original_seg_loc), new_main_ptr1, off1);
 #else
             co_await wo_wait_conn->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey);

@@ -647,7 +647,7 @@ public:
     uint16_t conn_id;
 
 public:
-    rdma_conn(rdma_worker *w, int _sock, uint8_t is_signal_conn, uint64_t segloc);
+    rdma_conn(rdma_worker *w, int _sock, uint8_t is_signal_conn = 0, uint64_t segloc = 0);
     ~rdma_conn();
 
     auto yield() { return worker->yield(); }

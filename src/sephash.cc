@@ -126,7 +126,7 @@ Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn
     coro_id = _coro_id;
 
     // rdma utils
-    clis[0] = _cli;
+    cli = _cli;
     // conn = _conn;
     conns[0] = _conn;
     wo_wait_conn = _wowait_conn;
@@ -140,7 +140,7 @@ Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn
 
     // alloc info
     alloc.Set((char *)lmr->addr, lmr->length);
-    seg_rmr = clis[0]->run(conns[0]->query_remote_mr(233));
+    seg_rmr = cli->run(conns[0]->query_remote_mr(233));
     uint64_t rbuf_size = (seg_rmr.rlen - (1ul << 20) * 200) /
                             (config.num_machine * config.num_cli * config.num_coro); // 头部保留5GB，其他的留给client
     uint64_t buf_id = config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id;
@@ -161,7 +161,7 @@ Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn
 #if LARGER_FP_FILTER_GRANULARITY
     memset(seg_meta, 0, sizeof(CurSegMeta *) * DIR_SIZE);
 #endif
-    clis[0]->run(sync_dir());
+    cli->run(sync_dir());
 }
 
 Client::~Client()
@@ -174,16 +174,6 @@ Client::~Client()
         {
             delete conns[i];
             conns[i] = nullptr;
-        }
-    }
-
-    // 销毁 clis 中的动态对象
-    for (size_t i = (1 << SEPHASH::INIT_DEPTH); i < clis.size(); ++i)
-    {
-        if (clis[i])
-        {
-            delete clis[i];
-            clis[i] = nullptr;
         }
     }
     // log_err("[%lu:%lu] miss_cnt:%lu", cli_id, coro_id, miss_cnt);
@@ -525,7 +515,6 @@ Retry:
     log_test("[%lu:%lu]开始第%d次SEND slot segloc:%lu", cli_id, coro_id, send_cnt + 1, segloc);
     if (segloc >= conns.size())
     {
-        clis.resize(segloc + 1, nullptr);
         conns.resize(segloc + 1, nullptr);
     }
     if (!conns[segloc])
@@ -535,8 +524,7 @@ Retry:
         // dir->print(std::format("[{}:{}]segloc:{}创建新的rdma_conn之前", cli_id,
         //                        coro_id, segloc));
         co_await check_gd(segloc); // 先更新对应&dir->segs[segloc]
-        clis[segloc] = new rdma_client(clis[0]->dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size, nullptr, clis[0]->cq, clis[0]->coros, clis[0]->free_head); // 复用clis[0]的cq和coros, free_head
-        conns[segloc] = clis[segloc]->connect(config.server_ip.c_str(), rdma_default_port, 0, segloc); // 一个cli只能有一个cli->conn，需要新建cli
+        conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, 0, segloc); // 一个cli只能有一个cli->conn，需要新建cli
         assert(conns[segloc] != nullptr);
         // log_err("[%lu:%lu]创建新的rdma_conn成功, segloc:%lu, qp_num:%d", cli_id,
         //         coro_id, segloc, conns[segloc]->qp->qp_num);

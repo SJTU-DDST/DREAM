@@ -205,11 +205,10 @@ int main(int argc, char *argv[])
         rdma_dev dev("mlx5_0", 1, config.gid_idx);
         // rdma_dev dev(nullptr, 1, config.gid_idx);
         std::vector<ibv_mr *> lmrs(config.num_cli * config.num_coro + 1, nullptr);
+        std::vector<rdma_client *> rdma_clis(config.num_cli + 1, nullptr);
 #if MODIFIED
-        std::vector<std::vector<rdma_client *>> rdma_clis(config.num_cli + 1, std::vector<rdma_client *>(1 << SEPHASH::INIT_DEPTH, nullptr));
         std::vector<std::vector<rdma_conn *>> rdma_conns(config.num_cli + 1, std::vector<rdma_conn *>(1 << SEPHASH::INIT_DEPTH, nullptr));
 #else
-        std::vector<rdma_client *> rdma_clis(config.num_cli + 1, nullptr);
         std::vector<rdma_conn *> rdma_conns(config.num_cli + 1, nullptr);
 #endif
         std::vector<rdma_conn *> rdma_wowait_conns(config.num_cli + 1, nullptr);
@@ -223,16 +222,15 @@ int main(int argc, char *argv[])
         {
             // log_err("创建第%lu个client, tempmp_size:%lu, max_coro:%lu, cq_size:%lu", i, rdma_default_tempmp_size, config.max_coro, config.cq_size);
 #if MODIFIED
-            rdma_clis[i][0] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[i][0] = rdma_clis[i][0]->connect(config.server_ip.c_str());
+            rdma_clis[i] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
+            rdma_conns[i][0] = rdma_clis[i]->connect(config.server_ip.c_str());
             for (uint64_t j = 1; j < (1 << SEPHASH::INIT_DEPTH); j++) {
-                rdma_clis[i][j] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size, nullptr, rdma_clis[i][0]->cq, rdma_clis[i][0]->coros, rdma_clis[i][0]->free_head);
-                rdma_conns[i][j] = rdma_clis[i][j]->connect(config.server_ip.c_str(), rdma_default_port, 0, j);
+                rdma_conns[i][j] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, 0, j);
                 assert(rdma_conns[i][j] != nullptr);
             }
-            rdma_wowait_conns[i] = rdma_clis[i][0]->connect(config.server_ip.c_str());
+            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
 #if RDMA_SIGNAL
-            rdma_signal_conn = rdma_clis[i][0]->connect(config.server_ip.c_str(), rdma_default_port, 1);
+            rdma_signal_conn = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, 1);
 #endif
 #else
             rdma_clis[i] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
@@ -299,11 +297,7 @@ int main(int argc, char *argv[])
                 }
                 rdma_cli->run(gather(std::move(tasks)));
             };
-#if MODIFIED
-            ths[i] = std::thread(th, rdma_clis[i][0], i);
-#else
             ths[i] = std::thread(th, rdma_clis[i], i);
-#endif
         }
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
@@ -355,11 +349,7 @@ int main(int argc, char *argv[])
                 }
                 rdma_cli->run(gather(std::move(tasks)));
             };
-#if MODIFIED
-            ths[i] = std::thread(th, rdma_clis[i][0], i);
-#else
             ths[i] = std::thread(th, rdma_clis[i], i);
-#endif
         }
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
@@ -412,11 +402,7 @@ int main(int argc, char *argv[])
         // Reset Ser
         if (config.machine_id == 0)
         {
-#if MODIFIED
-            rdma_clis[0][0]->run(((ClientType *)clis[0])->reset_remote());
-#else
             rdma_clis[0]->run(((ClientType *)clis[0])->reset_remote());
-#endif
         }
 
         free(mem_buf);
@@ -431,12 +417,11 @@ int main(int argc, char *argv[])
 #if MODIFIED
             for (uint64_t j = 0; j < (1 << SEPHASH::INIT_DEPTH); j++) {
                 delete rdma_conns[i][j];
-                delete rdma_clis[i][j];
             }
 #else
             delete rdma_conns[i];
-            delete rdma_clis[i];
 #endif
+            delete rdma_clis[i];
         }
 #if RDMA_SIGNAL
         delete rdma_signal_conn;

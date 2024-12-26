@@ -267,9 +267,7 @@ class Client : public BasicDB
     task<> print_main_seg(uint64_t seg_loc,uintptr_t main_seg_ptr, uint64_t main_seg_len);
 
     // rdma structs
-    // rdma_client *cli;
-    std::vector<rdma_client *> clis{nullptr}; // clis[0]是初始化时外部传进来的cli，其他的是在get_conn中动态创建的
-    // rdma_conn *conn;
+    rdma_client *cli;
     std::vector<rdma_conn *> conns{nullptr}; // conns[0]是初始化时外部传进来的conn，其他的是在get_conn中动态创建的
     rdma_conn *wo_wait_conn;
 #if RDMA_SIGNAL
