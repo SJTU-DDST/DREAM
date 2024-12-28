@@ -212,6 +212,7 @@ int main(int argc, char *argv[])
         std::vector<rdma_conn *> rdma_conns(config.num_cli + 1, nullptr);
 #endif
         std::vector<rdma_conn *> rdma_wowait_conns(config.num_cli + 1, nullptr);
+        // std::vector<rdma_conn *> rdma_xrc_conns(config.num_cli + 1, nullptr);
         std::mutex dir_lock;
         std::vector<BasicDB *> clis;
         std::thread ths[80];
@@ -222,14 +223,14 @@ int main(int argc, char *argv[])
 #if MODIFIED
             rdma_conns[i][0] = rdma_clis[i]->connect(config.server_ip.c_str());
             for (uint64_t j = 1; j < (1 << SEPHASH::INIT_DEPTH); j++) {
-                rdma_conns[i][j] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, 0, j);
+                rdma_conns[i][j] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Normal, j});
                 assert(rdma_conns[i][j] != nullptr);
             }
 #else
             rdma_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
             assert(rdma_conns[i] != nullptr);
 #endif
-            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, 1); // use wowait conn for signal
+            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Signal, 0}); // use wowait conn for signal
             assert(rdma_wowait_conns[i] != nullptr);
             for (uint64_t j = 0; j < config.num_coro; j++)
             {

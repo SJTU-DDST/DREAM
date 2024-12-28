@@ -516,7 +516,7 @@ Retry:
         // dir->print(std::format("[{}:{}]segloc:{}创建新的rdma_conn之前", cli_id,
         //                        coro_id, segloc));
         co_await check_gd(segloc); // 先更新对应&dir->segs[segloc]
-        conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, 0, segloc); // 一个cli只能有一个cli->conn，需要新建cli
+        conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Normal, segloc}); // 一个cli只能有一个cli->conn，需要新建cli
         assert(conns[segloc] != nullptr);
         // log_err("[%lu:%lu]创建新的rdma_conn成功, segloc:%lu, qp_num:%d", cli_id,
         //         coro_id, segloc, conns[segloc]->qp->qp_num);
@@ -526,7 +526,7 @@ Retry:
 
 #if CORO_DEBUG
     auto start_time = std::chrono::steady_clock::now();
-    co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[segloc], seg_rmr.rkey, lmr->lkey));
+    co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, segloc, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[segloc], seg_rmr.rkey, lmr->lkey));
     auto end_time = std::chrono::steady_clock::now();
     auto duration =
         std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
@@ -548,7 +548,7 @@ Retry:
                 remote_sign, remote_slot_cnt, remote_local_depth);
     }
 #else
-    co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey);
+    co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, segloc);
 #endif
     log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
 
@@ -935,13 +935,13 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
 #if MODIFIED
         std::bitset<32> new_segloc_bits((uint32_t)first_new_seg_loc); // new_seg_indices[0]
         new_segloc_bits.set(31);
-        log_merge("准备向远端地址%lx写入1，提醒创建新的Segment的SRQ", seg_ptr + sizeof(uint64_t));
+        // log_merge("准备向远端地址%lx写入1，提醒创建新的Segment的SRQ", seg_ptr + sizeof(uint64_t));
         wo_wait_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, new_segloc_bits.to_ulong()); // 象征性写slots[0]
-        log_merge("提醒创建segloc:%lu encoded:%lu htonl:%lu新的Segment的SRQ完成, main_seg_ptr:%lx, main_seg_len:%lu", first_new_seg_loc, new_segloc_bits.to_ulong(), htonl(new_segloc_bits.to_ulong()), new_main_ptr2, off2);
+        // log_merge("提醒创建segloc:%lu encoded:%lu htonl:%lu新的Segment的SRQ完成, main_seg_ptr:%lx, main_seg_len:%lu", first_new_seg_loc, new_segloc_bits.to_ulong(), htonl(new_segloc_bits.to_ulong()), new_main_ptr2, off2);
         
-        log_merge("向远端地址%lx写入1，提醒为旧Segment发布RECV", seg_ptr + sizeof(uint64_t));
+        // log_merge("向远端地址%lx写入1，提醒为旧Segment发布RECV", seg_ptr + sizeof(uint64_t));
         wo_wait_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, first_original_seg_loc); // 象征性写slots[0]
-        log_merge("提醒为segloc:%lu htonl:%lu旧的Segment发布RECV完成, main_seg_ptr:%lx, main_seg_len:%lu", first_original_seg_loc, htonl(first_original_seg_loc) , new_main_ptr1, off1);
+        // log_merge("提醒为segloc:%lu htonl:%lu旧的Segment发布RECV完成, main_seg_ptr:%lx, main_seg_len:%lu", first_original_seg_loc, htonl(first_original_seg_loc) , new_main_ptr1, off1);
 #else
         co_await wo_wait_conn->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey);
 #endif

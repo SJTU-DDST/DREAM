@@ -29,6 +29,8 @@
 // Modified
 #define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
 #define LARGER_FP_FILTER_GRANULARITY 1 // 使用更大的FP过滤粒度，避免写入FP过滤器前需要先读取。现在先用每个FP占用64bit粒度，可能可以改成8bit。TODO: 读取filter的地方还没改。
+#define USE_XRC 0 // 使用XRC
+
 // #define SEND_MULTI_SEG 1 // 启用多个TempSeg，用于测试多个TempSeg的性能。
 // 1. 允许client在满时分裂 OK
 // 2. client分裂后发出write with imm通知server OK

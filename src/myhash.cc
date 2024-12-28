@@ -1,4 +1,5 @@
 #include "myhash.h"
+#include <arpa/inet.h>
 
 namespace MYHASH
 {
@@ -74,13 +75,13 @@ namespace MYHASH
         if (!conns[segloc])
         {
             co_await check_gd(segloc);                                                                                                                                                    // 先更新对应&dir->segs[segloc]
-            conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, 0, segloc);                                                                                // 一个cli只能有一个cli->conn，需要新建cli
+            conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Normal, segloc});                                                                                // 一个cli只能有一个cli->conn，需要新建cli
             assert(conns[segloc] != nullptr);
         }
         perf.start_perf();
 #if CORO_DEBUG
         auto start_time = std::chrono::steady_clock::now();
-        co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[segloc], seg_rmr.rkey, lmr->lkey));
+        co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, segloc, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[segloc], seg_rmr.rkey, lmr->lkey));
         auto end_time = std::chrono::steady_clock::now();
         auto duration =
             std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
@@ -102,7 +103,7 @@ namespace MYHASH
                     remote_sign, remote_slot_cnt, remote_local_depth);
         }
 #else
-        co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey);
+        co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, segloc);
 #endif
         perf.push_perf("send_slot");
         log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
@@ -337,15 +338,18 @@ namespace MYHASH
                 co_await conns[0]->write(seg_rmr.raddr, seg_rmr.rkey, &dir->global_depth, sizeof(uint64_t), lmr->lkey);
             }
 
-            // 4.3 Write New MainSeg to Remote
+            // 4.3 Write New MainSeg to Remote // TODO: 还需要在远端更新srqn
             // a. New CurSeg && New MainSeg
+            std::bitset<32> new_segloc_bits((uint32_t)first_new_seg_loc); // new_seg_indices[0]
+            new_segloc_bits.set(31);
+
             CurSeg *new_cur_seg = (CurSeg *)alloc.alloc(sizeof(CurSeg));
             memset(new_cur_seg, 0, sizeof(CurSeg));
             new_cur_seg->seg_meta.local_depth = local_depth + 1; // IMPORTANT: local_depth+1，这是让客户端感知到split的关键
             new_cur_seg->seg_meta.sign = 1;
             new_cur_seg->seg_meta.main_seg_ptr = new_main_ptr2;
             new_cur_seg->seg_meta.main_seg_len = off2;
-            wo_wait_conn->pure_write(new_cur_seg->seg_meta.main_seg_ptr, seg_rmr.rkey, new_seg_2, sizeof(Slot) * off2, lmr->lkey);
+            wo_wait_conn->pure_write_with_imm(new_cur_seg->seg_meta.main_seg_ptr, seg_rmr.rkey, new_seg_2, sizeof(Slot) * off2, lmr->lkey, new_segloc_bits.to_ulong()); // 提醒为新的Segment创建SRQ，并更新SRQN
             co_await conns[0]->write(new_cur_ptr, seg_rmr.rkey, new_cur_seg, sizeof(CurSeg), lmr->lkey);
             // log_err("[%lu:%lu:%lu]更新新的CurSeg->seg_meta.local_depth: %lu", cli_id, coro_id, this->key_num, new_cur_seg->seg_meta.local_depth);
             // b. new main_seg for old

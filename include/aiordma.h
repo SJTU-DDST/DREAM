@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <functional>
 #include <infiniband/verbs.h>
+#include <fcntl.h>
 
 #include "common.h"
 
@@ -30,9 +31,17 @@
 #define DEBUG_CORO_DEFINE
 #endif
 
+enum class ConnType : uint8_t
+{
+    Normal,
+    Signal,
+    XRC_SEND,
+    XRC_RECV // Add more types as needed
+};
+
 struct ConnInfo
 {
-    uint8_t is_signal_conn;
+    ConnType conn_type;
     uint64_t segloc;
 };
 
@@ -202,6 +211,9 @@ class rdma_dev
     ibv_device_attr device_attr;
     ibv_port_attr port_attr;
     ibv_pd *pd{nullptr};
+    int fd{-1};
+    ibv_xrcd *xrcd{nullptr};
+    ibv_cq *cq{nullptr}; // for create_srq_ex
     int ib_port{-1};
     int gid_idx{-1};
 
@@ -219,7 +231,10 @@ class rdma_dev
     size_t alloc_conn_id() { std::lock_guard lg(conn_id_lock); return conn_ids.dequeue(); }
     void free_conn_id(size_t conn_id) { std::lock_guard lg(conn_id_lock); conn_ids.enqueue(conn_id); }
 
-    ibv_cq *create_cq(int cq_size) { return ibv_create_cq(ib_ctx, cq_size, nullptr, nullptr, 0); }
+    ibv_cq *create_cq(int cq_size) { 
+        cq = ibv_create_cq(ib_ctx, cq_size, nullptr, nullptr, 0);
+        return cq;
+    }
     ibv_srq *create_srq(int cq_size)
     {
         struct ibv_srq_init_attr attr = {
@@ -227,6 +242,22 @@ class rdma_dev
                 .max_wr = (uint32_t)cq_size,
                 .max_sge = 1}};
         return ibv_create_srq(pd, &attr);
+    }
+    ibv_srq *create_srq_ex(int cq_size)
+    {
+        struct ibv_srq_init_attr_ex attr;
+        memset(&attr, 0, sizeof(attr));
+        attr.attr.max_wr = (uint32_t)cq_size;
+        attr.attr.max_sge = 1;
+        attr.comp_mask = IBV_SRQ_INIT_ATTR_TYPE | IBV_SRQ_INIT_ATTR_XRCD |
+                         IBV_SRQ_INIT_ATTR_CQ | IBV_SRQ_INIT_ATTR_PD;
+        attr.srq_type = IBV_SRQT_XRC;
+        attr.xrcd = xrcd;
+        attr.cq = cq;
+        attr.pd = pd;
+        log_err("创建SRQ_EX成功");
+
+        return ibv_create_srq_ex(ib_ctx, &attr);
     }
 
 public:
@@ -356,7 +387,9 @@ public:
 
 protected:
     const ibv_qp_cap &qp_cap;
-    std::vector<struct ibv_srq *> srqs{nullptr}; // record SRQ, used to destroy
+    std::vector<struct ibv_srq *> srqs; // record SRQ, used to destroy
+    std::mutex srq_mutex; // 防止在create_srq时创建使用它的qp
+    std::condition_variable srq_cv;
 #if RDMA_SIGNAL
     struct ibv_srq *signal_srq{nullptr}; // signal conn's SRQ
 #endif
@@ -464,7 +497,7 @@ public:
      * @param port Server端口
      * @return rdma_conn* 建立的RDMA连接
      */
-    rdma_conn *connect(const char *host = rdma_default_host, int port = rdma_default_port, uint8_t is_signal_conn = 0, uint64_t segloc = 0);
+    rdma_conn *connect(const char *host = rdma_default_host, int port = rdma_default_port, ConnInfo conn_info = {ConnType::Normal, 0});
 
 #ifdef ENABLE_DOCA_DMA
     void enable_dma(uint32_t workq_size = dma_default_workq_size, size_t buf_inv_size = dma_default_inv_buf_size);
@@ -631,11 +664,11 @@ public:
     ibv_send_wr __exchange_wr;
     ibv_send_wr *exchange_wr{&__exchange_wr};
     std::unordered_map<uint32_t, std::variant<rdma_rmr, std::string>> exchange_idx;
-#if CLOSE_SOCKET
-    uint64_t segloc{0};
-#endif
-    void send_exchange(uint16_t proto, uint8_t is_signal_conn, uint64_t segloc);
-    void handle_recv_setup(const void *buf, size_t len, uint8_t is_signal_conn, uint64_t segloc);
+// #if CLOSE_SOCKET
+//     uint64_t segloc{0};
+// #endif
+    void send_exchange(uint16_t proto, ConnInfo conn_info);
+    void handle_recv_setup(const void *buf, size_t len, ConnInfo conn_info);
     int modify_qp_to_init();
     int modify_qp_to_rtr(uint32_t rqp_num, uint16_t rlid, const ibv_gid *rgid);
     int modify_qp_to_rts();
@@ -645,7 +678,7 @@ public:
     uint16_t conn_id;
 
 public:
-    rdma_conn(rdma_worker *w, int _sock, uint8_t is_signal_conn = 0, uint64_t segloc = 0);
+    rdma_conn(rdma_worker *w, int _sock, ConnInfo conn_info = {ConnType::Normal, 0});
     ~rdma_conn();
 
     auto yield() { return worker->yield(); }
@@ -689,7 +722,7 @@ public:
     rdma_faa_future faa(uint64_t raddr, uint32_t rkey, uint64_t addval DEBUG_LOCATION_DECL);
     rdma_faa_future faa(const rdma_rmr &remote_mr, uint32_t offset, uint64_t addval DEBUG_LOCATION_DECL)
     { return faa(remote_mr.raddr + offset, remote_mr.rkey, addval DEBUG_LOCATION_CALL_ARG); }
-    rdma_future send(void *laddr, uint32_t len, uint32_t lkey = 0 DEBUG_LOCATION_DECL DEBUG_DESC_DECL);
+    rdma_future send(void *laddr, uint32_t len, uint32_t lkey = 0, uint32_t remote_srqn = 0 DEBUG_LOCATION_DECL DEBUG_DESC_DECL);
     rdma_future send_with_imm(void *laddr, uint32_t len, uint32_t lkey, uint32_t imm_data DEBUG_LOCATION_DECL DEBUG_DESC_DECL);
     rdma_future send_then_read(void *send_laddr, uint32_t send_len, uint32_t send_lkey, uint64_t read_raddr, uint32_t read_rkey, void *read_laddr, uint32_t read_len, uint32_t read_lkey DEBUG_LOCATION_DECL);
     rdma_future send_then_fetch_add(void *send_laddr, uint32_t send_len, uint32_t send_lkey, uint64_t faa_raddr, uint32_t faa_rkey, uint64_t &faa_fetch, uint64_t faa_addval DEBUG_LOCATION_DECL);
