@@ -163,10 +163,10 @@ rdma_dev::rdma_dev(const char *dev_name, int _ib_port, int _gid_idx)
     xrcd_attr.fd = fd;
     xrcd_attr.oflags = O_CREAT;
     assert_require(xrcd = ibv_open_xrcd(ib_ctx, &xrcd_attr));
-    log_err("创建xrcd成功");
+    // log_err("创建xrcd成功");
 
     assert_require(info_mr = create_mr(rdma_info_mr_size, nullptr, mr_flag_ro));
-
+    // log_err("创建dev时创建info_mr成功");
     auto hdr = (rdma_infomr_hdr *)info_mr->addr;
     hdr->cksum = 0;
     hdr->tail = 0;
@@ -187,7 +187,7 @@ rdma_dev::~rdma_dev()
         log_warn("failed to close xrcd");
     if (fd >= 0 && close(fd))
         log_warn("failed to close the file for the XRC Domain");
-    log_err("关闭xrcd成功");
+    // log_err("关闭xrcd成功");
     if (ib_ctx && ibv_close_device(ib_ctx))
         log_warn("failed to close device");
 #ifdef ENABLE_DOCA_DMA
@@ -207,9 +207,15 @@ ibv_mr *rdma_dev::create_mr(size_t size, void *buf, int mr_flags)
     }
     if (buf == nullptr)
         return nullptr;
+    // printf("Registering memory region with the following parameters:\n");
+    // printf("pd: %p\n", pd);
+    // printf("buf: %p~%p\n", buf, (char *)buf + size);
+    // printf("size: %zu\n", size);
+    // printf("mr_flags: %d\n", mr_flags);
     auto mr = ibv_reg_mr(pd, buf, size, mr_flags);
     if (!mr && malloc_flag)
         free_hugepage(buf, upper_align(size, 1 << 21));
+    // printf("lkey: %u\n", mr->lkey);
     return mr;
 }
 
@@ -237,6 +243,7 @@ ibv_mr *rdma_dev::reg_mr(uint32_t mr_id, ibv_mr *mr)
 ibv_mr *rdma_dev::reg_mr(uint32_t mr_id, size_t size, void *buf, int mr_flags)
 {
     ibv_mr *res = create_mr(size, buf, mr_flags);
+    // log_err("reg_mr时创建MR成功");
     if (res && !reg_mr(mr_id, res))
     {
         rdma_free_mr(res, buf == nullptr);
@@ -390,6 +397,7 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
     {
         assert_require(mp = new tempmp(tempmp_size));
         assert_require(mpmr = dev.create_mr(mp->get_data_len(), mp->get_data_addr()));
+        // log_err("创建mpmr成功");
     }
     if (max_coros > 8)
     {
@@ -429,10 +437,21 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
         assert_require(srqs.size() == 0);
         for (uint64_t segloc = 0; segloc < (1 << SEPHASH::INIT_DEPTH); segloc++) {
             CurSeg *cur_seg = reinterpret_cast<CurSeg *>(this->dir->segs[segloc].cur_seg_ptr);
+#if USE_XRC
+            ibv_srq *srq;
+            assert_require(srq = dev.create_srq_ex(cq_size));
+            srqs.emplace_back(srq);
+
+            uint32_t srq_num;
+            assert_check(0 == ibv_get_srq_num(srqs[segloc], &srq_num));
+            log_test("初始化时创建srqs[%d]: %p, srq_num: %u->%u, cq_size: %d，并发布%d个RECV", segloc, srqs[segloc], cur_seg->seg_meta.srq_num, srq_num, cq_size, SLOT_PER_SEG);
+            cur_seg->seg_meta.srq_num = srq_num;
+#else
             assert_require(srqs.emplace_back(dev.create_srq(cq_size)));
+#endif
             for (int i = 0; i < SLOT_PER_SEG; i++)
             {
-                fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), lkey());
+                fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), dev.seg_mr->lkey);
                 wr.wr_id = wr_wo_await;
                 assert_check(0 == ibv_post_srq_recv(srqs[segloc], &wr, &bad));
             }
@@ -444,7 +463,7 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
         CurSeg *cur_seg = reinterpret_cast<CurSeg *>(this->dir->segs[0].cur_seg_ptr);
         for (int i = 0; i < SLOT_PER_SEG; i++)
         {
-            fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), lkey()); // 只用于接收RDMA_WRITE_IMM的imm_data，不会被写入
+            fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), dev.seg_mr->lkey); // 只用于接收RDMA_WRITE_IMM的imm_data，不会被写入
             wr.wr_id = wr_wo_await;
             assert_check(0 == ibv_post_srq_recv(signal_srq, &wr, &bad));
         }
@@ -724,14 +743,24 @@ void rdma_worker::worker_loop()
                     if (segloc >= srqs.size())
                         srqs.resize(segloc + 1, nullptr);
                     assert_require(!srqs[segloc])
+#if USE_XRC
+                    assert_require(srqs[segloc] = dev.create_srq_ex(rdma_default_cq_size));
+#else
                     assert_require(srqs[segloc] = dev.create_srq(rdma_default_cq_size));
+#endif
                     for (int i = 0; i < SLOT_PER_SEG; i++)
                     {
-                        fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), lkey());
+                        fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), dev.seg_mr->lkey);
                         wr.wr_id = wr_wo_await;
                         assert_check(0 == ibv_post_srq_recv(srqs[segloc], &wr, &bad));
                     }
                     log_test("分裂后创建新的srqs[%u]: %p，并发布%d个RECV", segloc, srqs[segloc], SLOT_PER_SEG);
+#if USE_XRC
+                    uint32_t srq_num;
+                    assert_check(0 == ibv_get_srq_num(srqs[segloc], &srq_num));
+                    log_test("分裂后创建新的srqs[%u]: %p, srq_num: %u->%u, 并发布%d个RECV", segloc, srqs[segloc], cur_seg->seg_meta.srq_num, srq_num, SLOT_PER_SEG);
+                    cur_seg->seg_meta.srq_num = srq_num;
+#endif
                     _max_segloc = segloc > _max_segloc ? segloc : _max_segloc;
                     srq_cv.notify_all();
                 } else {
@@ -742,14 +771,14 @@ void rdma_worker::worker_loop()
                     assert_require(segloc < srqs.size() && srqs[segloc])
                     for (int i = 0; i < SLOT_PER_SEG; i++)
                     {
-                        fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), lkey());
+                        fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), dev.seg_mr->lkey);
                         wr.wr_id = wr_wo_await;
                         assert_check(0 == ibv_post_srq_recv(srqs[segloc], &wr, &bad));
                     }
                     log_test("收到IMM，为srqs[%u]:%p发布%d个RECV, qp_num: %u", segloc, srqs[segloc], SLOT_PER_SEG, wc.qp_num);
                 }
                 if (signal_srq) {
-                    fill_recv_wr(&wr, &sge, reinterpret_cast<CurSeg *>(dir->segs[0].cur_seg_ptr)->slots, sizeof(Slot), lkey()); // 象征性加上sizeof(Slot)，必须是合法地址不能是nullptr？
+                    fill_recv_wr(&wr, &sge, reinterpret_cast<CurSeg *>(dir->segs[0].cur_seg_ptr)->slots, sizeof(Slot), dev.seg_mr->lkey); // 象征性加上sizeof(Slot)，必须是合法地址不能是nullptr？
                     wr.wr_id = wr_wo_await;
                     assert_check(0 == ibv_post_srq_recv(signal_srq, &wr, &bad));
                 }
@@ -771,6 +800,7 @@ void rdma_worker::worker_loop()
                 log_err("got bad completion with status: 0x%x, vendor syndrome: 0x%x", wc.status, wc.vendor_err);
                 cor->coro_state |= coro_state_error;
                 cor->print("错误");
+                assert_require(wc.status == IBV_WC_SUCCESS);
             }
             if (cor->coro_state & coro_state_inited)
             {
@@ -908,6 +938,10 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                         assert_require(conn_info.segloc < 100000);
 #endif
                         auto worker = workers[accepted_sock % worker_num];
+                        if (conn_info.conn_type == ConnType::XRC_SEND) {
+                            // log_err("接收到XRC_SEND的连接，类型更改为XRC_RECV");
+                            conn_info.conn_type = ConnType::XRC_RECV;
+                        }
                         auto conn = new rdma_conn(worker, accepted_sock, conn_info); // IMPORTANT: 服务器创建QP
                         assert_require(conn);
                         sk2conn[accepted_sock] = conn;
@@ -1036,8 +1070,12 @@ rdma_conn::rdma_conn(rdma_worker *w, int _sock, ConnInfo conn_info)
             qp_init_attr.sq_sig_all = 0;
             qp_init_attr.send_cq = worker->cq;
             qp_init_attr.recv_cq = worker->cq;
+#if USE_XRC
+            if (worker->qp_cap.max_recv_wr && conn_info.conn_type == ConnType::Signal)
+                qp_init_attr.srq = worker->signal_srq;
+#else
             if (worker->qp_cap.max_recv_wr) { // server
-    #if RDMA_SIGNAL
+#if RDMA_SIGNAL
                 if (conn_info.conn_type == ConnType::Signal)
                     qp_init_attr.srq = worker->signal_srq;
                 else
@@ -1055,32 +1093,47 @@ rdma_conn::rdma_conn(rdma_worker *w, int _sock, ConnInfo conn_info)
                     qp_init_attr.srq = worker->srqs[conn_info.segloc];
                 }
             }
+#endif
             qp_init_attr.cap = worker->qp_cap;
             assert_require(qp = ibv_create_qp(dev.pd, &qp_init_attr));
         } else {
             struct ibv_qp_init_attr_ex qp_init_attr;
             memset(&qp_init_attr, 0, sizeof(qp_init_attr));
-            qp_init_attr.qp_type = conn_info.conn_type == ConnType::XRC_RECV ? IBV_QPT_XRC_RECV : IBV_QPT_XRC_SEND;
+            // qp_init_attr.qp_type = conn_info.conn_type == ConnType::XRC_RECV ? IBV_QPT_XRC_RECV : IBV_QPT_XRC_SEND;
             qp_init_attr.sq_sig_all = 0;
-            qp_init_attr.send_cq = worker->cq;
-            qp_init_attr.recv_cq = worker->cq;
+            
 
-            if (conn_info.conn_type == ConnType::XRC_RECV)
+            if (conn_info.conn_type == ConnType::XRC_RECV) {
+                qp_init_attr.qp_type = IBV_QPT_XRC_RECV;
+                qp_init_attr.xrcd = dev.xrcd;
                 qp_init_attr.comp_mask = IBV_QP_INIT_ATTR_XRCD;
-            else if (conn_info.conn_type == ConnType::XRC_SEND)
+                qp_init_attr.cap.max_recv_wr = 1024;
+                qp_init_attr.cap.max_recv_sge = 1;
+                qp_init_attr.cap.max_inline_data = 0;
+            } else if (conn_info.conn_type == ConnType::XRC_SEND)
             {
+                qp_init_attr.qp_type = IBV_QPT_XRC_SEND;
+                qp_init_attr.send_cq = worker->cq;
+                // qp_init_attr.recv_cq = worker->cq;
+
+                qp_init_attr.cap.max_send_wr = 1024;
+                qp_init_attr.cap.max_recv_wr = 0;
+                qp_init_attr.cap.max_send_sge = 1;
+                qp_init_attr.cap.max_recv_sge = 0;
+                qp_init_attr.cap.max_inline_data = 0;
+
                 qp_init_attr.comp_mask = IBV_QP_INIT_ATTR_PD;
                 qp_init_attr.pd = dev.pd;
             }
-            qp_init_attr.xrcd = dev.xrcd;
             assert_require(qp = ibv_create_qp_ex(dev.ib_ctx, &qp_init_attr));
         }
     }
 
     assert_require(exchange_mr = dev.create_mr(rdma_info_mr_size, nullptr, mr_flag_lo));
-
+    log_test("创建conn时创建exchange_mr成功");
     auto hdr = (rdma_infomr_hdr *)exchange_mr->addr;
     hdr->tail = 0;
+    log_test("info_mr: %p, info_mr->addr: %p, info_mr->rkey: %u", dev.info_mr, dev.info_mr->addr, dev.info_mr->rkey);
 
     send_exchange(rdma_exchange_proto_setup, conn_info);
     log_info("new conn %d", sock);
@@ -1387,7 +1440,12 @@ rdma_future rdma_conn::do_send(ibv_send_wr *wr_begin, ibv_send_wr *wr_end DEBUG_
     //     log_err("发送read请求，wr_id: %d", cor->id);
     // }
     ibv_send_wr *bad;
-    assert_check(0 == ibv_post_send(qp, wr_begin, &bad));
+    // assert_check(0 == ibv_post_send(qp, wr_begin, &bad));
+    int res = ibv_post_send(qp, wr_begin, &bad);
+    if (res != 0) {
+        log_err("ibv_post_send failed: %d", res);
+        assert_check(0);
+    }
     return rdma_future(cor, this);
 }
 
@@ -1688,8 +1746,12 @@ rdma_future rdma_conn::send(void *laddr, uint32_t len, uint32_t _lkey, uint32_t 
     if (_lkey == 0)
         send_wr->send_flags = IBV_SEND_INLINE;
 #if USE_XRC
-    if (remote_srqn)
+    if (remote_srqn) {
         send_wr->qp_type.xrc.remote_srqn = remote_srqn;
+        // 输出 wr 参数中的所有内容用于调试
+        log_test("SEND: wr_id: %lu, next: %p, sg_list.addr: %lu, sg_list.length: %u, sg_list.lkey: %u, num_sge: %d, opcode: %d, send_flags: %d, qp_type.xrc.remote_srqn: %u\n", 
+               send_wr->wr_id, send_wr->next, send_wr->sg_list->addr, send_wr->sg_list->length, send_wr->sg_list->lkey, send_wr->num_sge, send_wr->opcode, send_wr->send_flags, send_wr->qp_type.xrc.remote_srqn);
+    }
 #endif
     auto res = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG DEBUG_CORO_CALL_ARG);
     free_buf(sge);

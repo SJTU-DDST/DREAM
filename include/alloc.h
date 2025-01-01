@@ -62,7 +62,7 @@ struct Alloc{
         offset=_start;
     }
     // 从前往后分配
-    char * alloc(uint64_t size, bool align = false)
+    char * alloc(uint64_t size, bool align = false) // IMPORTANT: 经常被reset，只能申请临时变量
     {
         char *res = start + offset;
         if(align){
@@ -72,9 +72,6 @@ struct Alloc{
             offset =  res - start;
         }else{
             offset += size;
-        }
-        if (offset > buf_size * 0.9) {
-            std::cerr << "Warning: Allocator space is running out!" << std::endl;
         }
         assert(offset < buf_size);
         return res;

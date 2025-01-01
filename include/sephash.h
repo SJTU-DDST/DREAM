@@ -291,7 +291,7 @@ class Client : public BasicDB
                         // 还是随机read吧，使用一个固定的序列？保存在本地，免得需要修改远端的。
     Directory *dir;
 #if LARGER_FP_FILTER_GRANULARITY
-    CurSegMeta *seg_meta[DIR_SIZE]; // 本地缓存CurSegMeta
+    std::unordered_map<size_t, CurSegMeta> seg_meta; // 本地缓存CurSegMeta
 #endif
 };
 

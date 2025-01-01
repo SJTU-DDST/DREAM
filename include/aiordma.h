@@ -107,10 +107,11 @@ struct CurSegMeta
     uintptr_t main_seg_ptr;
     uintptr_t main_seg_len;
     FpBitmapType fp_bitmap[FP_BITMAP_LENGTH]; // 16*64 = 1024,代表10bits fp的出现情况；整个CurSeg大约会出现（1024/8=128）个FP，因此能极大的减少search对CurSeg的访问
+    uint32_t srq_num; // XRC SRQ number
 
     void print(std::string desc = "")
     {
-        log_err("%s slot_cnt:%lu local_depth:%lu main_seg_ptr:%lx main_seg_len:%lu", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len);
+        log_err("%s slot_cnt:%lu local_depth:%lu main_seg_ptr:%lx main_seg_len:%lu srq_num:%u", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len, srq_num);
     }
 } __attribute__((aligned(1)));
 
@@ -255,12 +256,17 @@ class rdma_dev
         attr.xrcd = xrcd;
         attr.cq = cq;
         attr.pd = pd;
-        log_err("创建SRQ_EX成功");
 
-        return ibv_create_srq_ex(ib_ctx, &attr);
+        struct ibv_srq *srq = ibv_create_srq_ex(ib_ctx, &attr);
+        uint32_t srq_num;
+        if (ibv_get_srq_num(srq, &srq_num))
+            log_err("获取SRQ编号失败");
+        log_test("create_srq_ex创建SRQ的编号为：%u", srq_num);
+        return srq;
     }
 
 public:
+    ibv_mr *seg_mr{nullptr}; // for XRC post recv
     rdma_dev(const char *dev_name = nullptr, int _ib_port = 1, int _gid_idx = 1);
     ~rdma_dev();
     ibv_mr *create_mr(size_t size, void *buf = nullptr, int mr_flags = mr_flag_all);

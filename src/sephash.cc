@@ -52,6 +52,7 @@ void print_bit_map(uint64_t* fp_bitmap){
 Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
 {
     seg_mr = dev.reg_mr(233, config.mem_size);
+    dev.seg_mr = seg_mr;
     auto [dm, mr] = dev.reg_dmmr(234, dev_mem_size);
     lock_dm = dm;
     lock_mr = mr;
@@ -150,9 +151,6 @@ Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn
     memset(dir, 0, sizeof(Directory));
     memset(offset, 0, sizeof(SlotOffset) * DIR_SIZE);
     for(uint64_t i = 0 ; i < (1<<INIT_DEPTH) ; i++) this->offset[i].sign = 1;
-#if LARGER_FP_FILTER_GRANULARITY
-    memset(seg_meta, 0, sizeof(CurSegMeta *) * DIR_SIZE);
-#endif
     cli->run(sync_dir());
 }
 
@@ -532,16 +530,17 @@ Retry:
         std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
     if (duration.count() > 1)
     {
-        if (!seg_meta[segloc])
+        if (seg_meta.find(segloc) == seg_meta.end())
         {
-            seg_meta[segloc] = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-            memset(seg_meta[segloc], 0, sizeof(CurSegMeta));
+            seg_meta[segloc] = CurSegMeta();
+            memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
         }
-
-        co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, seg_meta[segloc], sizeof(uint64_t), lmr->lkey);
-        auto remote_sign = seg_meta[segloc]->sign;
-        auto remote_slot_cnt = seg_meta[segloc]->slot_cnt;
-        auto remote_local_depth = seg_meta[segloc]->local_depth;
+        CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+        co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, tmp_seg_meta, sizeof(uint64_t), lmr->lkey);
+        memcpy(&seg_meta[segloc], tmp_seg_meta, sizeof(CurSegMeta));
+        auto remote_sign = seg_meta[segloc].sign;
+        auto remote_slot_cnt = seg_meta[segloc].slot_cnt;
+        auto remote_local_depth = seg_meta[segloc].local_depth;
         log_err("[%lu:%lu]超时了！读取FAA地址%llx segloc=%llu remote_sign:%lu "
                 "remote_slot_cnt:%lu remote_local_depth:%lu",
                 cli_id, coro_id, segptr + sizeof(uint64_t), segloc,
@@ -559,18 +558,18 @@ Retry:
     auto remote_sign = fetch & 1;
     auto remote_slot_cnt = (fetch & ((1 << SIGN_AND_SLOT_CNT_BITS) - 1)) >> 1;
     auto remote_local_depth = fetch >> SIGN_AND_SLOT_CNT_BITS;
-    if (!seg_meta[segloc])
+    if (seg_meta.find(segloc) == seg_meta.end())
     {
-        seg_meta[segloc] = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-        memset(seg_meta[segloc], 0, sizeof(CurSegMeta));
+        seg_meta[segloc] = CurSegMeta();
+        memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
     }
-    seg_meta[segloc]->sign = remote_sign;
-    seg_meta[segloc]->slot_cnt = remote_slot_cnt; // TODO: 不使用fetch，直接返回到slot_cnt
-    seg_meta[segloc]->slot_cnt++;
+    seg_meta[segloc].sign = remote_sign;
+    seg_meta[segloc].slot_cnt = remote_slot_cnt; // TODO: 不使用fetch，直接返回到slot_cnt
+    seg_meta[segloc].slot_cnt++;
     // if (seg_meta[segloc]->slot_cnt >= SLOT_PER_SEG)
     //     log_err("[%lu:%lu]FAA segloc:%lu的meta地址%llx成功 remote_slot_cnt:%lu remote_local_depth:%lu",
     //             cli_id, coro_id, segloc, segptr + sizeof(uint64_t), remote_slot_cnt, remote_local_depth);
-    seg_meta[segloc]->slot_cnt %= SLOT_PER_SEG;
+    seg_meta[segloc].slot_cnt %= SLOT_PER_SEG;
     
     if (remote_local_depth > dir->segs[segloc].local_depth) { // 应该大于本地的local_depth就需要更新
         log_test("[%lu:%lu:%lu]远端分裂了！本次写入作废！需要重写！TODO: check_gd+重写。segloc:%lu, FAA地址:%p。", cli_id, coro_id, this->key_num, segloc, segptr + sizeof(uint64_t));
@@ -584,7 +583,7 @@ Retry:
         // dir->print(std::format("[{}:{}]同步之后", cli_id, coro_id));
     }
     // check if need split
-    if (seg_meta[segloc]->slot_cnt == 0)
+    if (seg_meta[segloc].slot_cnt == 0)
     {
         // dir->print(std::format("[{}:{}]合并之前", cli_id, coro_id));
         uint64_t my_pattern = (uint64_t)hash(key->data, key->len);
@@ -644,12 +643,15 @@ Retry:
         auto bit_loc = get_fp_bit(tmp->fp, tmp->fp_2);
         uintptr_t fp_ptr = segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType);
         // 远端的seg_meta->fp_bitmap[bit_loc]写入00000001。这里不用seg_meta，先alloc.alloc申请一个8byte buffer，写入00000001，然后写入远端。
-        if (!seg_meta[segloc]) {
-            seg_meta[segloc] = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-            memset(seg_meta[segloc], 0, sizeof(CurSegMeta));
+        CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+        if (seg_meta.find(segloc) == seg_meta.end())
+        {
+            seg_meta[segloc] = CurSegMeta();
+            memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
         }
-        seg_meta[segloc]->fp_bitmap[bit_loc] = 1;
-        conns[0]->pure_write(fp_ptr, seg_rmr.rkey, &seg_meta[segloc]->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
+        seg_meta[segloc].fp_bitmap[bit_loc] = 1;
+        memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
+        conns[0]->pure_write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
 #else
 #if MODIFIED
 #else

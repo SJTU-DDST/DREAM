@@ -24,7 +24,7 @@ link_directories(
 AUX_SOURCE_DIRECTORY ("src" src)
 
 # set(libs "-lmkl_intel_ilp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl -libverbs -lpthread" )
-set(libs "-lpthread -lm -ldl -libverbs -lpthread" )
+set(libs "-lpthread -lm -ldl -libverbs") # -lrdmacm -lmlx5
 
 add_executable(ser_cli test/ser_cli.cc ${src})
 target_link_libraries(ser_cli PRIVATE ${libs})

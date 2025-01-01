@@ -67,7 +67,43 @@ namespace MYHASH
 
         // a2. send slot
         static int send_cnt = 0;
-        log_test("[%lu:%lu]开始第%d次SEND slot segloc:%lu", cli_id, coro_id, send_cnt + 1, segloc);
+        // log_test("[%lu:%lu]开始第%d次SEND slot segloc:%lu", cli_id, coro_id, send_cnt + 1, segloc);
+#if USE_XRC
+        // if (segloc >= conns.size())
+        // {
+        //     conns.resize(segloc + 1, nullptr);
+        // }
+        // if (!conns[segloc])
+        // {
+        //     co_await check_gd(segloc);                                                                             // 先更新对应&dir->segs[segloc]
+        //     conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Normal, segloc}); // 一个cli只能有一个cli->conn，需要新建cli
+        //     assert(conns[segloc] != nullptr);
+        // }
+        perf.start_perf();
+
+        if (seg_meta.find(segloc) == seg_meta.end())
+        {
+            seg_meta[segloc] = CurSegMeta();
+            memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
+        }
+        while (!seg_meta[segloc].srq_num)
+        {
+            CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+            co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, tmp_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+            memcpy(&seg_meta[segloc], tmp_seg_meta, sizeof(CurSegMeta));
+            log_test("读取到segloc:%lu的meta地址%llx srq_num:%u", segloc, segptr + sizeof(uint64_t), seg_meta[segloc].srq_num);
+            // seg_meta[segloc].print(std::format("seg_meta[{}]在读取srq_num后:", segloc));
+        }
+        // uint32_t test_num;
+        // std::cout << "请输入一个数字:" << std::endl;
+        // std::cin >> test_num;
+        // std::cout << "test_num:" << test_num << std::endl;
+        // seg_meta[segloc].srq_num = test_num;
+        log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", conns[1]->qp->qp_num, segloc, seg_meta[segloc].srq_num);
+        assert_require(seg_meta[segloc].srq_num > 0);
+        co_await conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num); // seg_meta[segloc]->srq_num
+        log_test("发送slot到segloc:%lu srq_num:%u完成", segloc, seg_meta[segloc].srq_num);
+#else
         if (segloc >= conns.size())
         {
             conns.resize(segloc + 1, nullptr);
@@ -87,16 +123,16 @@ namespace MYHASH
             std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
         if (duration.count() > 1)
         {
-            if (!seg_meta[segloc])
+            if (seg_meta.find(segloc) == seg_meta.end())
             {
-                seg_meta[segloc] = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-                memset(seg_meta[segloc], 0, sizeof(CurSegMeta));
+                seg_meta[segloc] = CurSegMeta();
+                memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
             }
 
-            co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, seg_meta[segloc], sizeof(uint64_t), lmr->lkey);
-            auto remote_sign = seg_meta[segloc]->sign;
-            auto remote_slot_cnt = seg_meta[segloc]->slot_cnt;
-            auto remote_local_depth = seg_meta[segloc]->local_depth;
+            co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, &seg_meta[segloc], sizeof(uint64_t), lmr->lkey);
+            auto remote_sign = seg_meta[segloc].sign;
+            auto remote_slot_cnt = seg_meta[segloc].slot_cnt;
+            auto remote_local_depth = seg_meta[segloc].local_depth;
             log_err("[%lu:%lu]超时了！读取FAA地址%llx segloc=%llu remote_sign:%lu "
                     "remote_slot_cnt:%lu remote_local_depth:%lu",
                     cli_id, coro_id, segptr + sizeof(uint64_t), segloc,
@@ -105,8 +141,9 @@ namespace MYHASH
 #else
         co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, segloc);
 #endif
+#endif
         perf.push_perf("send_slot");
-        log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
+        // log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
 
         // a3. fetch and add slot_cnt
         uint64_t fetch = 0;
@@ -115,18 +152,14 @@ namespace MYHASH
         auto remote_sign = fetch & 1;
         auto remote_slot_cnt = (fetch & ((1 << SIGN_AND_SLOT_CNT_BITS) - 1)) >> 1;
         auto remote_local_depth = fetch >> SIGN_AND_SLOT_CNT_BITS;
-        if (!seg_meta[segloc])
-        {
-            seg_meta[segloc] = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-            memset(seg_meta[segloc], 0, sizeof(CurSegMeta));
+        seg_meta[segloc].sign = remote_sign;
+        seg_meta[segloc].slot_cnt = remote_slot_cnt; // TODO: 不使用fetch，直接返回到slot_cnt
+        seg_meta[segloc].slot_cnt++;
+        if (seg_meta[segloc].slot_cnt >= SLOT_PER_SEG) {
+            log_test("[%lu:%lu]FAA segloc:%lu的meta地址%llx成功 remote_slot_cnt:%lu remote_local_depth:%lu",
+                    cli_id, coro_id, segloc, segptr + sizeof(uint64_t), remote_slot_cnt, remote_local_depth);
         }
-        seg_meta[segloc]->sign = remote_sign;
-        seg_meta[segloc]->slot_cnt = remote_slot_cnt; // TODO: 不使用fetch，直接返回到slot_cnt
-        seg_meta[segloc]->slot_cnt++;
-        // if (seg_meta[segloc]->slot_cnt >= SLOT_PER_SEG)
-        //     log_err("[%lu:%lu]FAA segloc:%lu的meta地址%llx成功 remote_slot_cnt:%lu remote_local_depth:%lu",
-        //             cli_id, coro_id, segloc, segptr + sizeof(uint64_t), remote_slot_cnt, remote_local_depth);
-        seg_meta[segloc]->slot_cnt %= SLOT_PER_SEG;
+        seg_meta[segloc].slot_cnt %= SLOT_PER_SEG;
 
         bool remote_split = remote_local_depth > dir->segs[segloc].local_depth;
         if (remote_split)
@@ -141,7 +174,7 @@ namespace MYHASH
             // dir->print(std::format("[{}:{}]同步之后", cli_id, coro_id));
         }
         // check if need split
-        if (seg_meta[segloc]->slot_cnt == 0)
+        if (seg_meta[segloc].slot_cnt == 0)
         {
             CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
             co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
@@ -161,13 +194,10 @@ namespace MYHASH
         auto bit_loc = get_fp_bit(tmp->fp, tmp->fp_2);
         uintptr_t fp_ptr = segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType);
         // 远端的seg_meta->fp_bitmap[bit_loc]写入00000001。这里不用seg_meta，先alloc.alloc申请一个8byte buffer，写入00000001，然后写入远端。
-        if (!seg_meta[segloc])
-        {
-            seg_meta[segloc] = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-            memset(seg_meta[segloc], 0, sizeof(CurSegMeta));
-        }
-        seg_meta[segloc]->fp_bitmap[bit_loc] = 1;
-        conns[0]->pure_write(fp_ptr, seg_rmr.rkey, &seg_meta[segloc]->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
+        CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+        seg_meta[segloc].fp_bitmap[bit_loc] = 1;
+        memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
+        conns[0]->pure_write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
 #endif
         perf.push_insert();
         sum_cost.end_insert();
