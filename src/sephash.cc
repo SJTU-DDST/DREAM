@@ -253,33 +253,40 @@ task<> Client::reset_remote()
     co_await conns[0]->write(seg_rmr.raddr, seg_rmr.rkey, dir, sizeof(Directory), lmr->lkey);
 }
 
+// 定义一个全局的随机数生成器
+std::random_device rd;
+std::mt19937 gen(rd());
+std::uniform_int_distribution<> dis(5, 20);
+
 task<> Client::start(uint64_t total)
 {
     co_await sync_dir();
     uint64_t *start_cnt = (uint64_t *)alloc.alloc(sizeof(uint64_t), true);
     *start_cnt = 0;
+    std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
     co_await conns[0]->fetch_add(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, *start_cnt, 1);
-    // log_info("Start_cnt:%lu", *start_cnt);
+    // log_err("准备开始 Start_cnt:%lu", *start_cnt);
     while ((*start_cnt) < total)
     {
-        // log_info("Start_cnt:%lu", *start_cnt);
+        std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen))); // IMPORTANT: 通过FAA让所有客户端一起开始，为了避免CPU占用过高，这里加了一个sleep
+        // log_err("[%lu:%lu]开始重试 Start_cnt:%lu", cli_id, coro_id, *start_cnt);
         co_await conns[0]->read(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, start_cnt,
                             sizeof(uint64_t), lmr->lkey);
-        usleep(50); // IMPORTANT: 通过FAA让所有客户端一起开始，为了避免CPU占用过高，这里加了一个sleep
     }
 }
 
 task<> Client::stop()
 {
     uint64_t *start_cnt = (uint64_t *)alloc.alloc(sizeof(uint64_t));
+    std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
     co_await conns[0]->fetch_add(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, *start_cnt, -1);
-    // log_err("Start_cnt:%lu", *start_cnt);
+    // log_err("[%lu:%lu]准备停止 Start_cnt:%lu", cli_id, coro_id, *start_cnt);
     while ((*start_cnt) != 0)
     {
-        // log_info("Start_cnt:%lu", *start_cnt);
+        // log_info("准备停止 start_cnt:%lu", *start_cnt);
         co_await conns[0]->read(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, start_cnt,
                             sizeof(uint64_t), lmr->lkey);
-        usleep(50); // IMPORTANT: 通过FAA让所有客户端一起结束，为了避免CPU占用过高，这里加了一个sleep
+        std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen))); // IMPORTANT: 通过FAA让所有客户端一起结束，为了避免CPU占用过高，这里加了一个sleep
     }
 }
 

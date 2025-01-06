@@ -800,7 +800,7 @@ void rdma_worker::worker_loop()
                 log_err("got bad completion with status: 0x%x, vendor syndrome: 0x%x", wc.status, wc.vendor_err);
                 cor->coro_state |= coro_state_error;
                 cor->print("错误");
-                assert_require(wc.status == IBV_WC_SUCCESS);
+                assert_require(wc.status == IBV_WC_SUCCESS); // TODO: 细粒度合并
             }
             if (cor->coro_state & coro_state_inited)
             {
@@ -1281,7 +1281,7 @@ int rdma_conn::modify_qp_to_rts()
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTS;
     attr.timeout = 14;
-    attr.retry_cnt = 7;
+    attr.retry_cnt = 7; // 7 仅对 rnr_retry 是无限值。对于 retry_cnt 7 实际上是 7 次重试。
     attr.rnr_retry = 7; // 值 7 是特殊的，指定在 RNR 的情况下重试无限次
 #if LOW_MIN_RTR_TIMER
     attr.min_rnr_timer = 3; // 降低延迟。在开发过程中，最好将 attr.retry_cnt 和 attr.rnr_retry 设置为 0。

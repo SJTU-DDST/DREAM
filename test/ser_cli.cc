@@ -43,7 +43,9 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
-    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+    // The synchronization using start/stop is canceled because it crashes with a large number of threads
+    // on a single node. Since the number of operations is sufficient, it does not significantly affect performance.
+    // co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
     uint64_t tmp_key;
     Slice key, value;
     std::string tmp_value = std::string(32, '1');
@@ -52,13 +54,14 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
     key.len = sizeof(uint64_t);
     key.data = (char *)&tmp_key;
     uint64_t num_op = load_num / (config.num_machine * config.num_cli * config.num_coro);
+    // log_err("load_num:%lu num_op:%lu", load_num, num_op);
     for (uint64_t i = 0; i < num_op; i++)
     {
         tmp_key = GenKey(
             (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + i);
         co_await cli->insert(&key, &value);
     }
-    co_await cli->stop();
+    // co_await cli->stop();
     co_return;
 }
 
@@ -66,7 +69,7 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
-    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+    // co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
     uint64_t tmp_key;
     char buffer[1024];
     Slice key, value, ret_value, update_value;
@@ -183,7 +186,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         }
     }
     // log_err("cli_id:%lu coro_id:%lu run done, 等待stop", cli_id, coro_id);
-    co_await cli->stop();
+    // co_await cli->stop();
     co_return;
 }
 
@@ -280,6 +283,7 @@ int main(int argc, char *argv[])
                 std::vector<task<>> tasks;
                 for (uint64_t j = 0; j < config.num_coro; j++)
                 {
+                    // log_err("cli_id:%lu coro_id:%lu load start", cli_id, j);
                     tasks.emplace_back(load((ClientType *)clis[cli_id * config.num_coro + j], cli_id, j));
                 }
                 rdma_cli->run(gather(std::move(tasks)));

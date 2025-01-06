@@ -101,7 +101,11 @@ namespace MYHASH
         // seg_meta[segloc].srq_num = test_num;
         log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", conns[1]->qp->qp_num, segloc, seg_meta[segloc].srq_num);
         assert_require(seg_meta[segloc].srq_num > 0);
-        co_await conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num); // seg_meta[segloc]->srq_num
+#if CORO_DEBUG
+        co_await conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[1], seg_rmr.rkey, lmr->lkey));
+#else
+        co_await conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
+#endif
         log_test("发送slot到segloc:%lu srq_num:%u完成", segloc, seg_meta[segloc].srq_num);
 #else
         if (segloc >= conns.size())
