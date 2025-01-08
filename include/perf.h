@@ -8,8 +8,8 @@
 #include <fstream>
 #include <vector>
 #include <numeric>
-// #define USE_PERF
-// #define USE_SUM_COST
+#define USE_PERF
+#define USE_SUM_COST
 
 struct Perf
 {
@@ -86,14 +86,14 @@ struct Perf
 #endif
     }
 
-    void print(uint64_t cli_id,uint64_t coro_id){
+    void print(uint64_t cli_id, uint64_t coro_id) {
 #ifdef USE_PERF
         std::string insert_file_name = "insert_lat" + std::to_string(cli_id) + std::to_string(coro_id) + ".txt";
         to_file(insert_file_name.c_str(), insert_lat);
         std::string search_file_name = "search_lat" + std::to_string(cli_id) + std::to_string(coro_id) + ".txt";
         to_file(search_file_name.c_str(), search_lat);
 
-        auto print_stats = [](const std::vector<double>& latencies, const std::string& name) {
+        auto print_stats = [cli_id, coro_id](const std::vector<double>& latencies, const std::string& name) {
             if (latencies.empty()) return;
 
             std::vector<double> sorted_latencies = latencies;
@@ -105,17 +105,15 @@ struct Perf
             double p1 = sorted_latencies[sorted_latencies.size() * 1 / 100];
             double p99 = sorted_latencies[sorted_latencies.size() * 99 / 100];
 
-            std::cout << name << " 平均延迟: " << avg << " 微秒" << std::endl;
-            std::cout << name << " 中位数延迟: " << median << " 微秒" << std::endl;
-            std::cout << name << " 1% 延迟: " << p1 << " 微秒" << std::endl;
-            std::cout << name << " 99% 延迟: " << p99 << " 微秒" << std::endl;
+            // std::cout << "op: " name << "cli_id: "<< cli_id << " avg latency: " << avg << " us, median latency: " << median << " us, 1% latency: " << p1 << " us, 99% latency: " << p99 << " us" << std::endl;
+            std::println("op: {} cli_id: {} coro_id: {} avg latency: {} us, median latency: {} us, 1% latency: {} us, 99% latency: {} us", name, cli_id, coro_id, avg, median, p1, p99);
         };
 
-        print_stats(insert_lat, "插入");
-        print_stats(search_lat, "搜索");
+        print_stats(insert_lat, "insert");
+        print_stats(search_lat, "search");
 
         for (const auto &[name, lat] : lat_map) {
-            print_stats(lat, "操作 " + name);
+            print_stats(lat, name);
             std::string file_name = name + "_lat" + std::to_string(cli_id) + std::to_string(coro_id) + ".txt";
             to_file(file_name.c_str(), const_cast<std::vector<double>&>(lat));
         }

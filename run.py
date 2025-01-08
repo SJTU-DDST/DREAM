@@ -20,7 +20,7 @@ coro_num = args.coro_num
 
 # Define the connection information for each server
 servers = [
-    {'host': '192.168.98.70', 'user': 'congyong', 'password': '1111'},
+    # {'host': '192.168.98.70', 'user': 'congyong', 'password': '1111'}, # server
     {'host': '192.168.98.71', 'user': 'congyong', 'password': '1111'},
     {'host': '192.168.98.72', 'user': 'congyong', 'password': '1111'},
     {'host': '192.168.98.73', 'user': 'congyong', 'password': '1111'},
@@ -44,14 +44,18 @@ def server_command(i):
     conn = connections[i]
     print(f"server: {conn.host}")
     # conn.run('killall multi_rdma', warn=True)
-    result = conn.run(f'cd server && ./ser_cli.sh server {i}') 
+
+    print (f'RUN ./ser_cli.sh server {i} on {conn.host}')
+    result = conn.run(f'./ser_cli.sh server {i}') 
 
 def client_command(i):
     conn = connections[i]
     print(f"client: {conn.host}")
     # conn.run('killall ser_cli_var_kv', warn=True)
     # conn.run('free -h', warn=True)
+    print(f'RUN rm -f insert*.txt search*.txt out.txt core || true on {conn.host}')
     result = conn.run(f'rm -f insert*.txt search*.txt out.txt core || true')
+    print(f'RUN ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host}')
     result = conn.run(f'./run.sh {i} {cli_num} {coro_num} {num_servers}') 
 
 # Execute the task on all servers

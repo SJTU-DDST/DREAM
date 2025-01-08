@@ -6,20 +6,25 @@
 #       client_1: ../ser_cli.sh 1 1 1 2
 #       num_cli : 0~4
 #       num_coro : 1~4
+
+# Server auto run clients:
+#      server: ../ser_cli.sh server num_cli num_coro num_machine
+export LD_LIBRARY_PATH="/usr/local/lib64/:$LD_LIBRARY_PATH"
 if [ "$1" = "server" ]
 then
     echo "server"
-    cd /home/congyong/SepHash/build && bash ../sync.sh out 1 && \
+    cd /home/congyong/SepHash/build && bash ../sync.sh out 5 && \
     # ./ser_cli_var_kv --server \
     ./ser_cli --server \
     --gid_idx 1 \
     --max_coro 256 --cq_size 64 \
-    --mem_size 61268055040 #91268055040
+    --mem_size 91268055040 \
+    --num_cli $2 --num_coro $3 --num_machine $4
 
-    bash ../sync.sh in 1
-    grep -H . ./out*.txt
+    bash ../sync.sh in 5
+    # grep -H . ./out*.txt
 else
-    echo "machine" $1
+    echo "machine" $1 "num_machine" $4
 
     for num_cli in `seq $2 $2`;do
         for num_coro in `seq 1 $3`;do
@@ -27,7 +32,7 @@ else
                 echo "num_cli" $num_cli "num_coro" $num_coro "load_num" $load_num
                 # ./ser_cli_var_kv \
                 ./ser_cli \
-                --server_ip 192.168.98.74 --num_machine $4 --num_cli $num_cli --num_coro $num_coro \
+                --server_ip 192.168.98.70 --num_machine $4 --num_cli $num_cli --num_coro $num_coro \
                 --gid_idx 1 \
                 --max_coro 256 --cq_size 64 \
                 --machine_id $1  \

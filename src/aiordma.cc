@@ -677,7 +677,7 @@ void rdma_worker::worker_loop()
         auto current_time = std::chrono::steady_clock::now();
         auto seconds = std::chrono::duration_cast<std::chrono::seconds>(current_time - last_poll_time).count();
         if (seconds != last_seconds) {
-            if (seconds == 5) {
+            if (seconds == 30) {
                 log_err("卡住了%lu秒，输出所有segs=%lu的信息", seconds, this->_max_segloc);
                 for (int i = 0; i <= this->_max_segloc; i++) {
                     if (dir == nullptr || dir->segs == nullptr || !dir->segs[i].cur_seg_ptr) break;
