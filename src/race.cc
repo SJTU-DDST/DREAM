@@ -63,6 +63,18 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
     memset(dir, 0, sizeof(Directory));
     Init(dir);
     log_err("init");
+#if AUTO_RUN_CLIENT
+    log_err("auto run client");
+    config.print();
+
+    ser.start_serve();
+
+    log_err("start clients with run.py");
+    std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
+    log_err("Auto run client command: %s", command.c_str());
+    int result = system(command.c_str());
+    log_err("run.py completed with result: %d", result);
+#else
     auto wait_exit = [&]() {
         // getchar();
         std::cin.get(); // 等待用户输入
@@ -73,6 +85,7 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
     std::thread th(wait_exit);
     ser.start_serve();
     th.join();
+#endif
 }
 
 void Server::Init(Directory *dir)
@@ -281,6 +294,14 @@ Retry:
     // log_err("[%lu:%lu:%lu] op_key:%lu",machine_id,cli_id,coro_id,this->op_key);
     alloc.ReSet(sizeof(Directory) + kvblock_len);
     retry_cnt++;
+    // if (retry_cnt++ == 1000)
+    // {
+    //     log_err("[%lu:%lu]Fail to insert after %lu retries", cli_id, coro_id, retry_cnt);
+    //     perf.push_insert();
+    //     sum_cost.end_insert();
+    //     sum_cost.push_retry_cnt(retry_cnt);
+    //     co_return;
+    // }
     // Read Segment Ptr From CCEH_Cache
     uint64_t segloc = get_seg_loc(pattern_1, dir->global_depth);
     uintptr_t segptr = dir->segs[segloc].seg_ptr;

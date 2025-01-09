@@ -10,7 +10,7 @@ def set_hash_type(hash_type, old_hash_type = "SEPHASH"):
             data = file.read()
             data = data.replace(f"using ClientType = {old_hash_type}::Client;", f"using ClientType = {hash_type}::Client;")
             data = data.replace(f"using ServerType = {old_hash_type}::Server;", f"using ServerType = {hash_type}::Server;")
-
+            data = data.replace(f"using Slice = {old_hash_type}::Slice;", f"using Slice = {hash_type}::Slice;")
         with open(ser_cli_cc_path, "w") as file:
             file.write(data)
 
@@ -31,8 +31,8 @@ def reset_hash_type(old_hash_type):
     set_hash_type("MYHASH")
 
 # 定义 num_cli 列表
-num_cli_list = [1, 8, 16, 32]
-hash_types = ["SEPHASH", "MYHASH"]
+num_cli_list = [1, 2, 4, 8, 16, 32]
+hash_types = ["SEPHASH", "MYHASH", "RACE"]
 
 for hash_type in hash_types:
     base_dir = f"data/{hash_type}"
@@ -46,6 +46,7 @@ for hash_type in hash_types:
         command = f"../ser_cli.sh server {num_cli} 1 1"
         
         # 执行命令
+        print(f"Running command: {command}")
         result = subprocess.run(command, shell=True)
         
         # 检查命令是否成功执行

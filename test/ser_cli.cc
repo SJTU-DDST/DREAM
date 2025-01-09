@@ -24,11 +24,12 @@ uint64_t load_num;
 #if MODIFIED
 using ClientType = MYHASH::Client;
 using ServerType = MYHASH::Server;
+using Slice = MYHASH::Slice;
 #else
 using ClientType = SEPHASH::Client;
 using ServerType = SEPHASH::Server;
-#endif
 using Slice = SEPHASH::Slice;
+#endif
 
 inline uint64_t GenKey(uint64_t key)
 {

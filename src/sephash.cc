@@ -368,9 +368,11 @@ task<> Client::insert(Slice *key, Slice *value)
 Retry:
     alloc.ReSet(sizeof(Directory)+kvblock_len);
 #if !MODIFIED
-    if(retry_cnt++ == 10000) {
-        log_err("[%lu:%lu:%lu]retry_cnt:%lu, last retry_reason: %d, failed, return",cli_id,coro_id,this->key_num,retry_cnt, retry_reason);
-        // log_err("retry_cnt:%lu", retry_cnt);
+    if(retry_cnt++ == 1000) {
+        log_err("[%lu:%lu:%lu]Fail to insert after %lu retries, last retry_reason: %d",cli_id,coro_id,this->key_num,retry_cnt, retry_reason);
+        perf.push_insert();
+        sum_cost.end_insert();
+        sum_cost.push_retry_cnt(retry_cnt);
         co_return;
     }
 #endif

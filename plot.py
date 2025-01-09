@@ -20,22 +20,6 @@ def parse_txt_file(file_path):
     
     return iops, avg_latency, p99_latency
 
-def plot_data(data, metric, ylabel, title):
-    plt.figure()
-    for hash_type, values in data.items():
-        threads = sorted(values.keys())
-        metrics = [values[thread][metric] for thread in threads]
-        plt.plot(threads, metrics, marker='o', label=hash_type)
-        plt.xticks(threads)
-    
-    plt.xlabel('Number of Threads')
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.legend()
-    plt.grid(True)
-    # plt.show()
-    plt.savefig(f'{metric}.png')
-
 def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data):
     fig, axs = plt.subplots(1, 3, figsize=(10, 3))
     
@@ -64,14 +48,16 @@ def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data):
     axs[0].grid(True)
     
     axs[1].set_xlabel('Number of Threads')
-    axs[1].set_ylabel('Average Latency (us)')
+    axs[1].set_ylabel('Latency (us, log scale)')
     axs[1].set_title('Average Latency')
+    axs[1].set_yscale('log')  # 使用对数坐标轴
     axs[1].legend()
     axs[1].grid(True)
     
     axs[2].set_xlabel('Number of Threads')
-    axs[2].set_ylabel('99% Latency (us)')
+    axs[2].set_ylabel('Latency (us, log scale)')
     axs[2].set_title('99% Latency')
+    axs[2].set_yscale('log')  # 使用对数坐标轴
     axs[2].legend()
     axs[2].grid(True)
     

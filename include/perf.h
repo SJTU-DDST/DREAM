@@ -256,14 +256,22 @@ struct SumCost
 #ifdef USE_SUM_COST
         printf("merge_cnt:%ld, merge_time:%lf, split_cnt:%ld, split_time:%lf, insert_time:%lf\n",merge_cnt,merge_time,split_cnt,split_time,insert_time);
         // print avg insert time
-        printf("avg_insert:%lf\n",insert_time/insert_cnt);
-        printf("avg_merge:%lf\n",merge_time/merge_cnt);
+        if (insert_cnt == 0) {
+            printf("avg_insert:0\n");
+        } else {
+            printf("avg_insert:%lf\n",insert_time/insert_cnt);
+        }
+        if (merge_cnt == 0) {
+            printf("avg_merge:0\n");
+        } else {
+            printf("avg_merge:%lf\n",merge_time/merge_cnt);
+        }
         std::string insert_file_name = "insert_lat" + std::to_string(cli_id) + std::to_string(coro_id)+".txt";
         to_file(insert_file_name.c_str(),retry_cnt);
         // print avg_retry
         uint64_t sum = 0;
-        for (const auto& latency : retry_cnt) {
-            sum += latency;
+        for (const auto& retry : retry_cnt) {
+            sum += retry;
         }
         printf("avg_retry:%lf\n",1.0*sum/retry_cnt.size());
         std::string search_file_name = "search_lat" + std::to_string(cli_id) + std::to_string(coro_id)+".txt";

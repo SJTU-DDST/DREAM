@@ -436,7 +436,9 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
 
         assert_require(srqs.size() == 0);
         for (uint64_t segloc = 0; segloc < (1 << SEPHASH::INIT_DEPTH); segloc++) {
+#if MODIFIED
             CurSeg *cur_seg = reinterpret_cast<CurSeg *>(this->dir->segs[segloc].cur_seg_ptr);
+#endif
 #if USE_XRC
             ibv_srq *srq;
             assert_require(srq = dev.create_srq_ex(cq_size));
@@ -449,6 +451,7 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
 #else
             assert_require(srqs.emplace_back(dev.create_srq(cq_size)));
 #endif
+#if MODIFIED
             for (int i = 0; i < SLOT_PER_SEG; i++)
             {
                 fill_recv_wr(&wr, &sge, &cur_seg->slots[i], sizeof(Slot), dev.seg_mr->lkey);
@@ -456,6 +459,7 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
                 assert_check(0 == ibv_post_srq_recv(srqs[segloc], &wr, &bad));
             }
             log_test("初始化时创建srqs[%d]: %p, cq_size: %d，并发布%d个RECV", segloc, srqs[segloc], cq_size, SLOT_PER_SEG);
+#endif
         }
         _max_segloc = (1 << SEPHASH::INIT_DEPTH) - 1;
 #if RDMA_SIGNAL
