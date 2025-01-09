@@ -47,9 +47,13 @@ KVBlock* KvCache::get_cache(uint64_t offset){
 Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
 {
     seg_mr = dev.reg_mr(233, config.mem_size);
+#if USE_DM_MR
     auto [dm, mr] = dev.reg_dmmr(234, dev_mem_size);
     lock_dm = dm;
     lock_mr = mr;
+#else
+    lock_mr = dev.reg_mr(234, dev_mem_size);
+#endif
 
     alloc.Set((char *)seg_mr->addr, seg_mr->length);
     dir = (Directory *)alloc.alloc(sizeof(Directory));
@@ -58,11 +62,38 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
     log_err("init");
 
     // Init locks
+#if USE_DM_MR
     char tmp[dev_mem_size] = {}; // init locks to zero
     lock_dm->memcpy_to_dm(lock_dm, 0, tmp, dev_mem_size);
+#else
+    memset(lock_mr->addr, 0, dev_mem_size);
+#endif
     log_err("memset");
 
+#if AUTO_RUN_CLIENT
+    log_err("auto run client");
+    config.print();
+
     ser.start_serve();
+
+    log_err("start clients with run.py");
+    std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
+    log_err("Auto run client command: %s", command.c_str());
+    int result = system(command.c_str());
+    log_err("run.py completed with result: %d", result);
+#else
+    auto wait_exit = [&]()
+    {
+        // getchar();
+        std::cin.get(); // 等待用户输入
+        // 在这里添加你停止服务器的代码
+        ser.stop_serve();
+        std::cout << "Exiting..." << std::endl;
+    };
+    std::thread th(wait_exit);
+    ser.start_serve();
+    th.join();
+#endif
 }
 
 void Server::Init()
@@ -86,7 +117,11 @@ void Server::Init()
 Server::~Server()
 {
     rdma_free_mr(seg_mr);
+#if USE_DM_MR
     rdma_free_dmmr({lock_dm, lock_mr});
+#else
+    rdma_free_mr(lock_mr);
+#endif
 }
 
 Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn,
