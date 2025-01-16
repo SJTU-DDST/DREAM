@@ -2,3 +2,5 @@
 !CMakeLists.txt
 /build
 !*space*.txt
+data
+out

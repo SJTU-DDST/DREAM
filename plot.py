@@ -62,7 +62,7 @@ def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data):
     axs[2].grid(True)
     
     plt.tight_layout()
-    plt.savefig('combined_metrics.png')
+    plt.savefig('../out/combined_metrics.png')
 
 def main(data_dir):
     hash_types = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
@@ -90,4 +90,4 @@ def main(data_dir):
     plot_data_subplots(iops_data, avg_latency_data, p99_latency_data)
 
 if __name__ == '__main__':
-    main('data')
+    main('../data/data_uniform_insert_10M')

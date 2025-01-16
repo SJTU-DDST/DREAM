@@ -55,8 +55,13 @@ def client_command(i):
     # conn.run('free -h', warn=True)
     print(f'RUN rm -f insert*.txt search*.txt out.txt core || true on {conn.host}')
     result = conn.run(f'rm -f insert*.txt search*.txt out.txt core || true')
-    print(f'RUN ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host}')
-    result = conn.run(f'./run.sh {i} {cli_num} {coro_num} {num_servers}') 
+    print(f'RUN timeout 10m ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host}')
+    result = conn.run(f'timeout 10m ./run.sh {i} {cli_num} {coro_num} {num_servers}')
+    
+    if result.return_code == 124:
+        print(f'Command ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host} timed out.')
+    else:
+        print(f'Command ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host} completed with return code {result.return_code}.')
 
 # Execute the task on all servers
 threads = []

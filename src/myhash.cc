@@ -3,6 +3,9 @@
 
 namespace MYHASH
 {
+#if SPLIT_LOCAL_LOCK
+    std::vector<std::shared_mutex> Client::segloc_locks(65536);
+#endif
     task<> Client::insert(Slice *key, Slice *value)
     {
         perf.start_perf();
@@ -67,18 +70,6 @@ namespace MYHASH
 
         // a2. send slot
         static int send_cnt = 0;
-        // log_test("[%lu:%lu]开始第%d次SEND slot segloc:%lu", cli_id, coro_id, send_cnt + 1, segloc);
-#if USE_XRC
-        // if (segloc >= conns.size())
-        // {
-        //     conns.resize(segloc + 1, nullptr);
-        // }
-        // if (!conns[segloc])
-        // {
-        //     co_await check_gd(segloc);                                                                             // 先更新对应&dir->segs[segloc]
-        //     conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Normal, segloc}); // 一个cli只能有一个cli->conn，需要新建cli
-        //     assert(conns[segloc] != nullptr);
-        // }
         perf.start_perf();
 
         if (seg_meta.find(segloc) == seg_meta.end())
@@ -94,58 +85,23 @@ namespace MYHASH
             log_test("读取到segloc:%lu的meta地址%llx srq_num:%u", segloc, segptr + sizeof(uint64_t), seg_meta[segloc].srq_num);
             // seg_meta[segloc].print(std::format("seg_meta[{}]在读取srq_num后:", segloc));
         }
-        // uint32_t test_num;
-        // std::cout << "请输入一个数字:" << std::endl;
-        // std::cin >> test_num;
-        // std::cout << "test_num:" << test_num << std::endl;
-        // seg_meta[segloc].srq_num = test_num;
         log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", conns[1]->qp->qp_num, segloc, seg_meta[segloc].srq_num);
         assert_require(seg_meta[segloc].srq_num > 0);
-#if CORO_DEBUG
-        co_await conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[1], seg_rmr.rkey, lmr->lkey));
-#else
-        co_await conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
+        {
+#if SPLIT_LOCAL_LOCK
+            std::shared_lock<std::shared_mutex> read_lock(segloc_locks[segloc]);
 #endif
+#if CORO_DEBUG
+            auto send_slot = conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[1], seg_rmr.rkey, lmr->lkey));
+#else
+            auto send_slot = conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
+#endif
+#if SPLIT_LOCAL_LOCK
+            read_lock.unlock();
+#endif
+            co_await std::move(send_slot);
+        }
         log_test("发送slot到segloc:%lu srq_num:%u完成", segloc, seg_meta[segloc].srq_num);
-#else
-        if (segloc >= conns.size())
-        {
-            conns.resize(segloc + 1, nullptr);
-        }
-        if (!conns[segloc])
-        {
-            co_await check_gd(segloc);                                                                                                                                                    // 先更新对应&dir->segs[segloc]
-            conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Normal, segloc});                                                                                // 一个cli只能有一个cli->conn，需要新建cli
-            assert(conns[segloc] != nullptr);
-        }
-        perf.start_perf();
-#if CORO_DEBUG
-        auto start_time = std::chrono::steady_clock::now();
-        co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, segloc, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[segloc], seg_rmr.rkey, lmr->lkey));
-        auto end_time = std::chrono::steady_clock::now();
-        auto duration =
-            std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
-        if (duration.count() > 1)
-        {
-            if (seg_meta.find(segloc) == seg_meta.end())
-            {
-                seg_meta[segloc] = CurSegMeta();
-                memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
-            }
-
-            co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, &seg_meta[segloc], sizeof(uint64_t), lmr->lkey);
-            auto remote_sign = seg_meta[segloc].sign;
-            auto remote_slot_cnt = seg_meta[segloc].slot_cnt;
-            auto remote_local_depth = seg_meta[segloc].local_depth;
-            log_err("[%lu:%lu]超时了！读取FAA地址%llx segloc=%llu remote_sign:%lu "
-                    "remote_slot_cnt:%lu remote_local_depth:%lu",
-                    cli_id, coro_id, segptr + sizeof(uint64_t), segloc,
-                    remote_sign, remote_slot_cnt, remote_local_depth);
-        }
-#else
-        co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, segloc);
-#endif
-#endif
         perf.push_perf("send_slot");
         // log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
 
@@ -180,10 +136,16 @@ namespace MYHASH
         // check if need split
         if (seg_meta[segloc].slot_cnt == 0)
         {
-            CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
-            co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+            {
+#if SPLIT_LOCAL_LOCK
+                std::unique_lock<std::shared_mutex> write_lock(segloc_locks[segloc]);
+#endif
 
-            co_await Split(segloc, segptr, my_seg_meta);
+                CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
+                co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+
+                co_await Split(segloc, segptr, my_seg_meta);
+            }
             send_cnt = 0;
             if (remote_split) goto Retry;
             perf.push_insert();

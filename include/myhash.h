@@ -1,4 +1,5 @@
 #pragma once
+#include <shared_mutex>
 #include "sephash.h"
 
 namespace MYHASH
@@ -23,6 +24,9 @@ namespace MYHASH
     protected:
 #if !LARGER_FP_FILTER_GRANULARITY // 只是为了通过编译，MYHASH只会在LARGER_FP_FILTER_GRANULARITY=1时使用
         std::unordered_map<size_t, CurSegMeta> seg_meta; // 本地缓存CurSegMeta
+#endif
+#if SPLIT_LOCAL_LOCK
+        static std::vector<std::shared_mutex> segloc_locks;
 #endif
         task<> Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_meta);
         uint64_t merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth);
