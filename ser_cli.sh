@@ -10,6 +10,7 @@
 # Server auto run clients:
 #      server: ../ser_cli.sh server num_cli num_coro num_machine
 export LD_LIBRARY_PATH="/usr/local/lib64/:$LD_LIBRARY_PATH"
+num_op=100000000
 if [ "$1" = "server" ]
 then
     echo "server"
@@ -29,7 +30,7 @@ else
     for num_cli in `seq $2 $2`;do
         for num_coro in `seq 1 $3`;do
             for load_num in 0;do
-                echo "num_cli" $num_cli "num_coro" $num_coro "load_num" $load_num "op_num" 100000000
+                echo "num_cli" $num_cli "num_coro" $num_coro "load_num" $load_num "op_num" $num_op
                 # ./ser_cli_var_kv \
                 ./ser_cli \
                 --server_ip 192.168.98.70 --num_machine $4 --num_cli $num_cli --num_coro $num_coro \
@@ -37,7 +38,7 @@ else
                 --max_coro 256 --cq_size 64 \
                 --machine_id $1  \
                 --load_num $load_num \
-                --num_op 100000000 \
+                --num_op $num_op \
                 --pattern_type 0 \
                 --insert_frac 1.0 \
                 --read_frac   0.0 \

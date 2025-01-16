@@ -666,7 +666,7 @@ Retry:
         }
         seg_meta[segloc].fp_bitmap[bit_loc] = 1;
         memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
-        conns[0]->pure_write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
+        co_await conns[0]->write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
 #else
 #if MODIFIED
 #else
@@ -683,8 +683,10 @@ Retry:
     //     last_segptr = segptr;
     // }
 
-    conns[0]->pure_write(fp_ptr, seg_rmr.rkey,
-                                &remote_seg_meta->fp_bitmap[bit_loc], sizeof(uint64_t), lmr->lkey);
+    // Ensure strong consistency by waiting for the filter write to complete before considering
+    // the write operation as finished, avoiding the scenario where a read operation cannot find
+    // the just-completed write.
+    co_await conns[0]->write(fp_ptr, seg_rmr.rkey, &remote_seg_meta->fp_bitmap[bit_loc], sizeof(uint64_t), lmr->lkey);
 #endif
 #endif
     perf.push_insert();

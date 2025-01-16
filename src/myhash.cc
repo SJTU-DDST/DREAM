@@ -107,7 +107,23 @@ namespace MYHASH
 
         // a3. fetch and add slot_cnt
         uint64_t fetch = 0;
-        co_await conns[0]->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, 1ULL << 1); // segloc?
+        auto faa_slot_cnt = conns[0]->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, 1ULL << 1);
+
+        // b. write fp bitmap 同时进行write fp和faa slot_cnt，可能导致因为远端分裂而无效的写入被读到，但读取时会读CurSegment元数据，可以检查depth是否匹配而排除
+#if LARGER_FP_FILTER_GRANULARITY
+        auto bit_loc = get_fp_bit(tmp->fp, tmp->fp_2);
+        uintptr_t fp_ptr = segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType);
+        // 远端的seg_meta->fp_bitmap[bit_loc]写入00000001。这里不用seg_meta，先alloc.alloc申请一个8byte buffer，写入00000001，然后写入远端。
+        CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+        seg_meta[segloc].fp_bitmap[bit_loc] = 1;
+        memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
+        auto write_fp_bitmap = conns[0]->write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
+#endif
+
+        co_await std::move(faa_slot_cnt);
+#if LARGER_FP_FILTER_GRANULARITY
+        co_await std::move(write_fp_bitmap);
+#endif
 
         auto remote_sign = fetch & 1;
         auto remote_slot_cnt = (fetch & ((1 << SIGN_AND_SLOT_CNT_BITS) - 1)) >> 1;
@@ -155,16 +171,6 @@ namespace MYHASH
         }
         if (remote_split) goto Retry;
 
-        // b. write fp bitmap
-#if LARGER_FP_FILTER_GRANULARITY
-        auto bit_loc = get_fp_bit(tmp->fp, tmp->fp_2);
-        uintptr_t fp_ptr = segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType);
-        // 远端的seg_meta->fp_bitmap[bit_loc]写入00000001。这里不用seg_meta，先alloc.alloc申请一个8byte buffer，写入00000001，然后写入远端。
-        CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-        seg_meta[segloc].fp_bitmap[bit_loc] = 1;
-        memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
-        conns[0]->pure_write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
-#endif
         perf.push_insert();
         sum_cost.end_insert();
         sum_cost.push_retry_cnt(retry_cnt);
