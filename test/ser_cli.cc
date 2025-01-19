@@ -17,6 +17,7 @@
 #include "split_search_fptable_wocache.h"
 #include <set>
 #include <stdint.h>
+#include <barrier>
 #define ORDERED_INSERT
 // #define ALLOW_KEY_OVERLAP
 Config config;
@@ -40,13 +41,16 @@ inline uint64_t GenKey(uint64_t key)
 #endif
 }
 
+std::unique_ptr<std::barrier<>> barrier;
+
 template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
     // The synchronization using start/stop is canceled because it crashes with a large number of threads
     // on a single node. Since the number of operations is sufficient, it does not significantly affect performance.
-    // co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+    barrier->arrive_and_wait();
+    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
     uint64_t tmp_key;
     Slice key, value;
     std::string tmp_value = std::string(32, '1');
@@ -62,7 +66,8 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
             (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + i);
         co_await cli->insert(&key, &value);
     }
-    // co_await cli->stop();
+    barrier->arrive_and_wait();
+    co_await cli->stop();
     co_return;
 }
 
@@ -70,7 +75,8 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
-    // co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+    barrier->arrive_and_wait();
+    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
     uint64_t tmp_key;
     char buffer[1024];
     Slice key, value, ret_value, update_value;
@@ -187,13 +193,15 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         }
     }
     // log_err("cli_id:%lu coro_id:%lu run done, 等待stop", cli_id, coro_id);
-    // co_await cli->stop();
+    barrier->arrive_and_wait();
+    co_await cli->stop();
     co_return;
 }
 
 int main(int argc, char *argv[])
 {
     config.ParseArg(argc, argv);
+    barrier = std::make_unique<std::barrier<>>(config.num_cli * config.num_coro);
     load_num = config.load_num;
     if (config.is_server)
     {

@@ -68,31 +68,34 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
     lock_dm->memcpy_to_dm(lock_dm, 0, tmp, dev_mem_size);
     log_err("memset, any key to exit");
 
-#if AUTO_RUN_CLIENT
-    log_err("auto run client");
-    config.print();
-
-    ser.start_serve(nullptr, 1, zero_qp_cap, rdma_default_tempmp_size, rdma_default_max_coros, rdma_default_cq_size, rdma_default_port, dir);
-
-    log_err("start clients with run.py");
-    // int result = system("python3 ../run.py 1 client 8 1");
-    std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
-    log_err("Auto run client command: %s", command.c_str());
-    int result = system(command.c_str());
-    log_err("run.py completed with result: %d", result);    
-#else
-    auto wait_exit = [&]()
+    if (config.auto_run_client)
     {
-        std::cin.get(); // 等待用户输入
-        ser.stop_serve();
-        log_err("Exiting...");
-    };
-    std::thread th(wait_exit);
+        log_err("auto run client");
+        config.print();
 
-    // ser.start_serve();
-    ser.start_serve(nullptr, 1, zero_qp_cap, rdma_default_tempmp_size, rdma_default_max_coros, rdma_default_cq_size, rdma_default_port, dir);
-    th.join();
-#endif
+        ser.start_serve(nullptr, 1, zero_qp_cap, rdma_default_tempmp_size, rdma_default_max_coros, rdma_default_cq_size, rdma_default_port, dir);
+
+        log_err("start clients with run.py");
+        // int result = system("python3 ../run.py 1 client 8 1");
+        std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
+        log_err("Auto run client command: %s", command.c_str());
+        int result = system(command.c_str());
+        log_err("run.py completed with result: %d", result);
+    }
+    else
+    {
+        auto wait_exit = [&]()
+        {
+            std::cin.get(); // 等待用户输入
+            ser.stop_serve();
+            log_err("Exiting...");
+        };
+        std::thread th(wait_exit);
+
+        // ser.start_serve();
+        ser.start_serve(nullptr, 1, zero_qp_cap, rdma_default_tempmp_size, rdma_default_max_coros, rdma_default_cq_size, rdma_default_port, dir);
+        th.join();
+    }
 }
 
 void Server::Init()
@@ -269,12 +272,12 @@ task<> Client::start(uint64_t total)
     co_await sync_dir();
     uint64_t *start_cnt = (uint64_t *)alloc.alloc(sizeof(uint64_t), true);
     *start_cnt = 0;
-    std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
     co_await conns[0]->fetch_add(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, *start_cnt, 1);
     // log_err("准备开始 Start_cnt:%lu", *start_cnt);
     while ((*start_cnt) < total)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen))); // IMPORTANT: 通过FAA让所有客户端一起开始，为了避免CPU占用过高，这里加了一个sleep
+        // std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen))); // IMPORTANT: 通过FAA让所有客户端一起开始，为了避免CPU占用过高，这里加了一个sleep
         // log_err("[%lu:%lu]开始重试 Start_cnt:%lu", cli_id, coro_id, *start_cnt);
         co_await conns[0]->read(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, start_cnt,
                             sizeof(uint64_t), lmr->lkey);
@@ -284,7 +287,7 @@ task<> Client::start(uint64_t total)
 task<> Client::stop()
 {
     uint64_t *start_cnt = (uint64_t *)alloc.alloc(sizeof(uint64_t));
-    std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
     co_await conns[0]->fetch_add(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, *start_cnt, -1);
     // log_err("[%lu:%lu]准备停止 Start_cnt:%lu", cli_id, coro_id, *start_cnt);
     while ((*start_cnt) != 0)
@@ -292,7 +295,7 @@ task<> Client::stop()
         // log_info("准备停止 start_cnt:%lu", *start_cnt);
         co_await conns[0]->read(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, start_cnt,
                             sizeof(uint64_t), lmr->lkey);
-        std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen))); // IMPORTANT: 通过FAA让所有客户端一起结束，为了避免CPU占用过高，这里加了一个sleep
+        // std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen))); // IMPORTANT: 通过FAA让所有客户端一起结束，为了避免CPU占用过高，这里加了一个sleep
     }
 }
 

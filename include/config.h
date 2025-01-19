@@ -5,6 +5,7 @@
 struct Config
 {
     bool is_server;
+    bool auto_run_client;
     // const char *server_ip;
     std::string server_ip;
     uint64_t num_machine;
@@ -31,6 +32,7 @@ struct Config
     {
         cmdline::parser cmd_parser;
         cmd_parser.add("server", 'a', "Is a server or client");
+        cmd_parser.add("auto_run_client", 't', "Server automatically run client");
         cmd_parser.add<std::string>("server_ip", 'b', "IP address of server", false);
         cmd_parser.add<uint64_t>("num_cli", 'c', "Number of client", false, 4, cmdline::range(1, 80));
         cmd_parser.add<uint64_t>("num_machine", 'd', "Number of client", false, 4, cmdline::range(1, 80));
@@ -48,10 +50,10 @@ struct Config
         cmd_parser.add<double>("delete_frac", 'q', "delete_frac", false, 0.0);
         cmd_parser.add<uint64_t>("read_size", 'r', "read_size", false, 64);
         cmd_parser.add<uint64_t>("load_num", 's', "load_num", false, 10000);
-
         cmd_parser.parse_check(argc, argv);
 
         is_server = cmd_parser.exist("server");
+        auto_run_client = cmd_parser.exist("auto_run_client");
         server_ip = cmd_parser.get<std::string>("server_ip"); //.c_str();
         num_machine = cmd_parser.get<uint64_t>("num_machine");
         num_cli = cmd_parser.get<uint64_t>("num_cli");
@@ -83,6 +85,7 @@ struct Config
         // printf("Configuraion\n");
         printf("Configuraion %s\n", desc.c_str());
         printf("is_server                 = %s\n", is_server ? "true" : "false");
+        printf("auto_run_client                 = %s\n", auto_run_client ? "true" : "false");
         printf("server_ip                 = %s\n", server_ip.c_str());
         printf("machine_id                 = %lu\n", machine_id);
         printf("gid_idx                 = %lu\n", gid_idx);

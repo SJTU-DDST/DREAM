@@ -262,30 +262,33 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
     memset(dir, 0, sizeof(Directory));
     Init();
     log_err("init");
-#if AUTO_RUN_CLIENT
-    log_err("auto run client");
-    config.print();
-
-    ser.start_serve();
-
-    log_err("start clients with run.py");
-    std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
-    log_err("Auto run client command: %s", command.c_str());
-    int result = system(command.c_str());
-    log_err("run.py completed with result: %d", result);
-#else
-    auto wait_exit = [&]()
+    if (config.auto_run_client)
     {
-        // getchar();
-        std::cin.get(); // 等待用户输入
-        // 在这里添加你停止服务器的代码
-        ser.stop_serve();
-        std::cout << "Exiting..." << std::endl;
-    };
-    std::thread th(wait_exit);
-    ser.start_serve();
-    th.join();
-#endif
+        log_err("auto run client");
+        config.print();
+
+        ser.start_serve();
+
+        log_err("start clients with run.py");
+        std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
+        log_err("Auto run client command: %s", command.c_str());
+        int result = system(command.c_str());
+        log_err("run.py completed with result: %d", result);
+    }
+    else
+    {
+        auto wait_exit = [&]()
+        {
+            // getchar();
+            std::cin.get(); // 等待用户输入
+            // 在这里添加你停止服务器的代码
+            ser.stop_serve();
+            std::cout << "Exiting..." << std::endl;
+        };
+        std::thread th(wait_exit);
+        ser.start_serve();
+        th.join();
+    }
 }
 
 void Server::Init()

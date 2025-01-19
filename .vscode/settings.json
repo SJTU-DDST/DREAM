@@ -97,6 +97,7 @@
     "stack": "cpp",
     "source_location": "cpp",
     "text_encoding": "cpp",
-    "filesystem": "cpp"
+    "filesystem": "cpp",
+    "barrier": "cpp"
   }
 }

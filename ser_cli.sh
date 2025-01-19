@@ -16,7 +16,7 @@ then
     echo "server"
     cd /home/congyong/SepHash/build && bash ../sync.sh out 5 && \
     # ./ser_cli_var_kv --server \
-    ./ser_cli --server \
+    ./ser_cli --server --auto_run_client \
     --gid_idx 1 \
     --max_coro 256 --cq_size 64 \
     --mem_size 91268055040 \
