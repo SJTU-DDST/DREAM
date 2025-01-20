@@ -382,21 +382,6 @@ Retry:
     // 1. Cal Segloc according to Global Depth At local
     Slot *tmp = (Slot *)alloc.alloc(sizeof(Slot));
     uint64_t segloc = get_seg_loc(pattern, dir->global_depth);
-#if MODIFIED
-    if (dir->segs[segloc].local_depth != dir->global_depth) {
-        uint64_t root_segloc = get_seg_loc(pattern, dir->segs[segloc].local_depth);
-        if (dir->segs[root_segloc].local_depth == dir->segs[segloc].local_depth) { // 没分裂
-            //log_err("[%lu:%lu]本地还没分裂，segloc:%lu用root_segloc:%lu代替", cli_id, coro_id, segloc, root_segloc);
-            segloc = root_segloc;
-        } else { // 同步
-            // log_err("[%lu:%lu]本地已经分裂，root depth:%lu != segloc depth:%lu", cli_id, coro_id, dir->segs[root_segloc].local_depth, dir->segs[segloc].local_depth);
-            // dir->print("同步之前");
-            co_await check_gd(segloc);
-            // co_await check_gd(root_segloc);
-            // dir->print("同步之后");
-        }
-    }
-#endif
     uintptr_t segptr = dir->segs[segloc].cur_seg_ptr;
     if(segptr == 0){
         // log_err("[%lu:%lu:%lu]本地segloc:%lu的segptr=0, 客户端第一次访问这个CurSeg？",cli_id,coro_id,this->key_num,segloc);
@@ -408,7 +393,6 @@ Retry:
         }
     }
 
-#if !MODIFIED
     // 2. read segment_meta && segment_slot concurrently
     // a. read meta
     CurSegMeta *remote_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
@@ -494,143 +478,17 @@ Retry:
         this->offset[segloc].offset += slots_len;
         this->offset[segloc].offset = this->offset[segloc].offset%SLOT_PER_SEG;
     }
-#endif
 
     // 4. write slot
     // a. Init Slot
-#if MODIFIED
-    // uint64_t dep = 0; // seg_meta->local_depth - (seg_meta->local_depth % 4); // 按4对齐 FIXME: 去掉before read后现在还没有seg_meta，可以用缓存的dir->segs[segloc].local_depth
-    uint64_t dep = dir->segs[segloc].local_depth - (dir->segs[segloc].local_depth % 4);
-    // 去掉before read后现在还没有seg_meta，可以用缓存的dir->segs[segloc].local_depth
-    // 这个会影响分裂后去到哪个segment，发送slot时需要带上本地的local_depth，分裂时如果不匹配则读取远端的local_depth
-#else
     uint64_t dep = remote_seg_meta->local_depth - (remote_seg_meta->local_depth % 4); // 按4对齐
-#endif
     tmp->dep = pattern >> dep;
     tmp->fp = fp(pattern);
     tmp->len = (kvblock_len + ALIGNED_SIZE - 1) / ALIGNED_SIZE;
-#if MODIFIED
-    tmp->sign = 0; // 目前sign的作用已经被slot_cnt替代
-#else
     tmp->sign = remote_seg_meta->sign;
-#endif
     tmp->offset = ralloc.offset(kvblock_ptr);
     tmp->fp_2 = fp2(pattern);
 
-#if MODIFIED
-    // a2. send slot
-    static int send_cnt = 0;
-    log_test("[%lu:%lu]开始第%d次SEND slot segloc:%lu", cli_id, coro_id, send_cnt + 1, segloc);
-    if (segloc >= conns.size())
-    {
-        conns.resize(segloc + 1, nullptr);
-    }
-    if (!conns[segloc])
-    {
-        // log_err("[%lu:%lu]创建新的rdma_conn, segloc:%lu", cli_id, coro_id,
-        //         segloc);
-        // dir->print(std::format("[{}:{}]segloc:{}创建新的rdma_conn之前", cli_id,
-        //                        coro_id, segloc));
-        co_await check_gd(segloc); // 先更新对应&dir->segs[segloc]
-        conns[segloc] = cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Normal, segloc}); // 一个cli只能有一个cli->conn，需要新建cli
-        assert(conns[segloc] != nullptr);
-        // log_err("[%lu:%lu]创建新的rdma_conn成功, segloc:%lu, qp_num:%d", cli_id,
-        //         coro_id, segloc, conns[segloc]->qp->qp_num);
-        // dir->print(std::format("[{}:{}]segloc:{}创建新的rdma_conn之后", cli_id,
-        //                        coro_id, segloc));
-    }
-
-#if CORO_DEBUG
-    auto start_time = std::chrono::steady_clock::now();
-    co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, segloc, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[segloc], seg_rmr.rkey, lmr->lkey));
-    auto end_time = std::chrono::steady_clock::now();
-    auto duration =
-        std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
-    if (duration.count() > 1)
-    {
-        if (seg_meta.find(segloc) == seg_meta.end())
-        {
-            seg_meta[segloc] = CurSegMeta();
-            memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
-        }
-        CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-        co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, tmp_seg_meta, sizeof(uint64_t), lmr->lkey);
-        memcpy(&seg_meta[segloc], tmp_seg_meta, sizeof(CurSegMeta));
-        auto remote_sign = seg_meta[segloc].sign;
-        auto remote_slot_cnt = seg_meta[segloc].slot_cnt;
-        auto remote_local_depth = seg_meta[segloc].local_depth;
-        log_err("[%lu:%lu]超时了！读取FAA地址%llx segloc=%llu remote_sign:%lu "
-                "remote_slot_cnt:%lu remote_local_depth:%lu",
-                cli_id, coro_id, segptr + sizeof(uint64_t), segloc,
-                remote_sign, remote_slot_cnt, remote_local_depth);
-    }
-#else
-    co_await conns[segloc]->send(tmp, sizeof(Slot), lmr->lkey, segloc);
-#endif
-    log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
-
-    // a3. fetch and add slot_cnt
-    uint64_t fetch = 0;
-    co_await conns[0]->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, 1ULL << 1); // segloc?
-
-    auto remote_sign = fetch & 1;
-    auto remote_slot_cnt = (fetch & ((1 << SIGN_AND_SLOT_CNT_BITS) - 1)) >> 1;
-    auto remote_local_depth = fetch >> SIGN_AND_SLOT_CNT_BITS;
-    if (seg_meta.find(segloc) == seg_meta.end())
-    {
-        seg_meta[segloc] = CurSegMeta();
-        memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
-    }
-    seg_meta[segloc].sign = remote_sign;
-    seg_meta[segloc].slot_cnt = remote_slot_cnt; // TODO: 不使用fetch，直接返回到slot_cnt
-    seg_meta[segloc].slot_cnt++;
-    // if (seg_meta[segloc]->slot_cnt >= SLOT_PER_SEG)
-    //     log_err("[%lu:%lu]FAA segloc:%lu的meta地址%llx成功 remote_slot_cnt:%lu remote_local_depth:%lu",
-    //             cli_id, coro_id, segloc, segptr + sizeof(uint64_t), remote_slot_cnt, remote_local_depth);
-    seg_meta[segloc].slot_cnt %= SLOT_PER_SEG;
-    
-    if (remote_local_depth > dir->segs[segloc].local_depth) { // 应该大于本地的local_depth就需要更新
-        log_test("[%lu:%lu:%lu]远端分裂了！本次写入作废！需要重写！TODO: check_gd+重写。segloc:%lu, FAA地址:%p。", cli_id, coro_id, this->key_num, segloc, segptr + sizeof(uint64_t));
-        // dir->print(std::format("[{}:{}]segloc:{}同步之前", cli_id, coro_id, segloc));
-        co_await check_gd(segloc);// TODO: 稍后重写，如果是最后一个，至少要合并完
-        // 更新本地的seg_meta
-        auto new_segloc = get_seg_loc(pattern, dir->global_depth);
-        co_await check_gd(new_segloc); // 现在&dir->segs[segloc]是最新的
-        // segptr = dir->segs[segloc].cur_seg_ptr;
-        // TODO: 更新所有指向此Segment的DirEntry
-        // dir->print(std::format("[{}:{}]同步之后", cli_id, coro_id));
-    }
-    // check if need split
-    if (seg_meta[segloc].slot_cnt == 0)
-    {
-        // dir->print(std::format("[{}:{}]合并之前", cli_id, coro_id));
-        uint64_t my_pattern = (uint64_t)hash(key->data, key->len);
-        uint64_t my_segloc = get_seg_loc(my_pattern, dir->global_depth);
-        uintptr_t my_segptr = dir->segs[my_segloc].cur_seg_ptr;
-        // if (my_segptr == 0)
-        // {                                          // 目前不会执行
-        //     my_segptr = co_await check_gd(my_segloc); // 现在只会修改main_seg_len和main_seg_ptr
-        //     uint64_t new_seg_loc = get_seg_loc(my_pattern, dir->global_depth);
-        //     if (new_seg_loc != my_segloc)
-        //     {
-        //         retry_reason = 1;
-        //         goto Retry;
-        //     }
-        // }
-
-        CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-        // auto read_meta =
-        co_await conns[0]->read(my_segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
-
-        co_await Split(my_segloc, segptr, my_seg_meta);
-        // dir->print(std::format("[{}:{}]合并之后", cli_id, coro_id));
-        send_cnt = 0;
-        perf.push_insert();
-        sum_cost.end_insert();
-        sum_cost.push_retry_cnt(retry_cnt);
-        co_return;
-    }
-#else
     // b. cas slot
     uintptr_t slot_ptr = seg_slots_ptr + slot_id * sizeof(Slot);
     int remote_slot_index = (slot_ptr - segptr - sizeof(uint64_t) - sizeof(CurSegMeta)) / sizeof(Slot);
@@ -654,7 +512,6 @@ Retry:
         sum_cost.push_retry_cnt(retry_cnt);
         co_return;
     }
-#endif
 
     // b. write fp bitmap
 #if LARGER_FP_FILTER_GRANULARITY
@@ -670,8 +527,6 @@ Retry:
         seg_meta[segloc].fp_bitmap[bit_loc] = 1;
         memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
         co_await conns[0]->write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
-#else
-#if MODIFIED
 #else
     auto [bit_loc, bit_info] = get_fp_bit(tmp->fp, tmp->fp_2);
     uintptr_t fp_ptr = segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType);
@@ -690,7 +545,6 @@ Retry:
     // the write operation as finished, avoiding the scenario where a read operation cannot find
     // the just-completed write.
     co_await conns[0]->write(fp_ptr, seg_rmr.rkey, &remote_seg_meta->fp_bitmap[bit_loc], sizeof(uint64_t), lmr->lkey);
-#endif
 #endif
     perf.push_insert();
     sum_cost.end_insert();
@@ -954,19 +808,7 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
 
         // 4.4 Change Sign (Equal to unlock this segment)
         cur_seg->seg_meta.sign = !cur_seg->seg_meta.sign;
-#if MODIFIED
-        std::bitset<32> new_segloc_bits((uint32_t)first_new_seg_loc); // new_seg_indices[0]
-        new_segloc_bits.set(31);
-        // log_merge("准备向远端地址%lx写入1，提醒创建新的Segment的SRQ", seg_ptr + sizeof(uint64_t));
-        wo_wait_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, new_segloc_bits.to_ulong()); // 象征性写slots[0]
-        // log_merge("提醒创建segloc:%lu encoded:%lu htonl:%lu新的Segment的SRQ完成, main_seg_ptr:%lx, main_seg_len:%lu", first_new_seg_loc, new_segloc_bits.to_ulong(), htonl(new_segloc_bits.to_ulong()), new_main_ptr2, off2);
-        
-        // log_merge("向远端地址%lx写入1，提醒为旧Segment发布RECV", seg_ptr + sizeof(uint64_t));
-        wo_wait_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, &(cur_seg->slots[0]), sizeof(uint64_t), lmr->lkey, first_original_seg_loc); // 象征性写slots[0]
-        // log_merge("提醒为segloc:%lu htonl:%lu旧的Segment发布RECV完成, main_seg_ptr:%lx, main_seg_len:%lu", first_original_seg_loc, htonl(first_original_seg_loc) , new_main_ptr1, off1);
-#else
         co_await wo_wait_conn->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey);
-#endif
         sum_cost.end_split();
         // dir->print(std::format("[{}:{}]分裂之后", cli_id, coro_id));
         co_return;
@@ -1022,13 +864,7 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
     // 5.3 Change Sign (Equal to unlock this segment)
     cur_seg->seg_meta.sign = !cur_seg->seg_meta.sign;
     cur_seg->seg_meta.slot_cnt = 0;
-#if MODIFIED
-    log_merge("segloc:%lu合并了，准备向远端地址%lx写入1，提醒为旧Segment发布RECV", seg_loc, seg_ptr + sizeof(uint64_t));
-    wo_wait_conn->pure_write_with_imm(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey, seg_loc); // 为旧Segment发布RECV，此处的WRITE和上面的相同，无实际作用，只是为了触发信号
-    log_merge("合并后提醒为segloc:%lu旧Segment发布RECV完成，main_seg_ptr:%lx,main_seg_len:%lu", seg_loc, new_main_ptr, new_main_len);
-#else
     co_await wo_wait_conn->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t),lmr->lkey);
-#endif
     sum_cost.end_merge();
 }
 
