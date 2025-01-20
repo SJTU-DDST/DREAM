@@ -36,8 +36,6 @@
 // 1. 允许client在满时分裂 OK
 // 2. client分裂后发出write with imm通知server OK
 // 3. server接收到write with imm后为新分裂出的segment创建SRQ，将SRQ信息记录在CurSegMeta OK
-// 3.1 client conn改为conns OK
-// 3.2 允许client写入非0的segloc，如果发现本地不认识对应srq(conns[segloc]==0)，创建新QP以连接新的SRQ OK
 // 4. INTEGRATED_SLOT_CNT；将slot_cnt嵌入local_depth，这样FAA slot_cnt后可以同时得到local_depth，判断远端是否分裂 OK
 // 5. 判断远端分裂后check_gd，重试写入 OK
 // 6. client判断远端分裂后，刚才的写入需要无效化，在Slot中添加8bit的发送方local_depth，如果不一致，合并时丢弃该条目 OK

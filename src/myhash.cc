@@ -80,21 +80,21 @@ namespace MYHASH
         while (!seg_meta[segloc].srq_num)
         {
             CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-            co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, tmp_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+            co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, tmp_seg_meta, sizeof(CurSegMeta), lmr->lkey);
             memcpy(&seg_meta[segloc], tmp_seg_meta, sizeof(CurSegMeta));
             log_test("读取到segloc:%lu的meta地址%llx srq_num:%u", segloc, segptr + sizeof(uint64_t), seg_meta[segloc].srq_num);
             // seg_meta[segloc].print(std::format("seg_meta[{}]在读取srq_num后:", segloc));
         }
-        log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", conns[1]->qp->qp_num, segloc, seg_meta[segloc].srq_num);
+        log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", xrc_conn->qp->qp_num, segloc, seg_meta[segloc].srq_num);
         assert_require(seg_meta[segloc].srq_num > 0);
         {
 #if SPLIT_LOCAL_LOCK
             std::shared_lock<std::shared_mutex> read_lock(segloc_locks[segloc]);
 #endif
 #if CORO_DEBUG
-            auto send_slot = conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, conns[1], seg_rmr.rkey, lmr->lkey));
+            auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, xrc_conn, seg_rmr.rkey, lmr->lkey));
 #else
-            auto send_slot = conns[1]->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
+            auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
 #endif
 #if SPLIT_LOCAL_LOCK
             read_lock.unlock();
@@ -107,7 +107,7 @@ namespace MYHASH
 
         // a3. fetch and add slot_cnt
         uint64_t fetch = 0;
-        auto faa_slot_cnt = conns[0]->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, 1ULL << 1);
+        auto faa_slot_cnt = conn->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, 1ULL << 1);
 
         // b. write fp bitmap 同时进行write fp和faa slot_cnt，可能导致因为远端分裂而无效的写入被读到，但读取时会读CurSegment元数据，可以检查depth是否匹配而排除
 #if LARGER_FP_FILTER_GRANULARITY
@@ -117,7 +117,7 @@ namespace MYHASH
         CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
         seg_meta[segloc].fp_bitmap[bit_loc] = 1;
         memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
-        auto write_fp_bitmap = conns[0]->write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
+        auto write_fp_bitmap = conn->write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
 #endif
 
         co_await std::move(faa_slot_cnt);
@@ -158,7 +158,7 @@ namespace MYHASH
 #endif
 
                 CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
-                co_await conns[0]->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+                co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
 
                 co_await Split(segloc, segptr, my_seg_meta);
             }
@@ -186,7 +186,7 @@ namespace MYHASH
         uint64_t main_seg_ptr = old_seg_meta->main_seg_ptr;
         // 1. Read CurSeg
         CurSeg *cur_seg = (CurSeg *)alloc.alloc(sizeof(CurSeg));
-        co_await conns[0]->read(seg_ptr, seg_rmr.rkey, cur_seg, sizeof(CurSeg), lmr->lkey);
+        co_await conn->read(seg_ptr, seg_rmr.rkey, cur_seg, sizeof(CurSeg), lmr->lkey);
 
         // 因为只有cas写入最后一个slot的cli才会进入到对一个segment的split，所以不用对Segment额外加锁
         if (cur_seg->seg_meta.main_seg_ptr != old_seg_meta->main_seg_ptr || cur_seg->seg_meta.local_depth != local_depth)
@@ -200,7 +200,7 @@ namespace MYHASH
         uint64_t main_seg_size = sizeof(Slot) * dir->segs[seg_loc].main_seg_len;
         MainSeg *main_seg = (MainSeg *)alloc.alloc(main_seg_size);
         if (main_seg_size)
-            co_await conns[0]->read(dir->segs[seg_loc].main_seg_ptr, seg_rmr.rkey, main_seg, main_seg_size, lmr->lkey);
+            co_await conn->read(dir->segs[seg_loc].main_seg_ptr, seg_rmr.rkey, main_seg, main_seg_size, lmr->lkey);
 
         // 3. Sort Segment
         MainSeg *new_main_seg = (MainSeg *)alloc.alloc(main_seg_size + sizeof(Slot) * SLOT_PER_SEG);
@@ -234,10 +234,10 @@ namespace MYHASH
                 {
                     // if dep_off == 3 (Have consumed all info in dep bits), read && construct new dep
 #ifdef TOO_LARGE_KV
-                    co_await conns[0]->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,
+                    co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,
                                             this->kv_block_len, lmr->lkey);
 #else
-                    co_await conns[0]->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,
+                    co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,
                                             new_main_seg->slots[i].len * ALIGNED_SIZE, lmr->lkey); // IMPORTANT: 读取完整KV，合并可以参考。
 #endif
                     pattern = (uint64_t)hash(kv_block->data, kv_block->k_len);
@@ -321,7 +321,7 @@ namespace MYHASH
                     cur_seg_ptr = seg_rmr.raddr + sizeof(uint64_t) + (cur_seg_loc + offset) * sizeof(DirEntry);
 
                     // Update DirEntry
-                    co_await conns[0]->write(cur_seg_ptr, seg_rmr.rkey, &dir->segs[cur_seg_loc + offset], sizeof(DirEntry), lmr->lkey);
+                    co_await conn->write(cur_seg_ptr, seg_rmr.rkey, &dir->segs[cur_seg_loc + offset], sizeof(DirEntry), lmr->lkey);
 
                     // if (local_depth == dir->global_depth){
                     //     // global
@@ -337,7 +337,7 @@ namespace MYHASH
             {
                 // log_err("local_depth达到上限，更新global depth:%lu -> %lu, max segs:%d to %d",dir->global_depth,dir->global_depth+1, (1 << global_depth), (1 << (global_depth+1))); // at first we have 16 segs
                 dir->global_depth++;
-                co_await conns[0]->write(seg_rmr.raddr, seg_rmr.rkey, &dir->global_depth, sizeof(uint64_t), lmr->lkey);
+                co_await conn->write(seg_rmr.raddr, seg_rmr.rkey, &dir->global_depth, sizeof(uint64_t), lmr->lkey);
             }
 
             // 4.3 Write New MainSeg to Remote // TODO: 还需要在远端更新srqn
@@ -352,7 +352,7 @@ namespace MYHASH
             new_cur_seg->seg_meta.main_seg_ptr = new_main_ptr2;
             new_cur_seg->seg_meta.main_seg_len = off2;
             wo_wait_conn->pure_write_with_imm(new_cur_seg->seg_meta.main_seg_ptr, seg_rmr.rkey, new_seg_2, sizeof(Slot) * off2, lmr->lkey, new_segloc_bits.to_ulong()); // 提醒为新的Segment创建SRQ，并更新SRQN
-            co_await conns[0]->write(new_cur_ptr, seg_rmr.rkey, new_cur_seg, sizeof(CurSeg), lmr->lkey);
+            co_await conn->write(new_cur_ptr, seg_rmr.rkey, new_cur_seg, sizeof(CurSeg), lmr->lkey);
             // log_err("[%lu:%lu:%lu]更新新的CurSeg->seg_meta.local_depth: %lu", cli_id, coro_id, this->key_num, new_cur_seg->seg_meta.local_depth);
             // b. new main_seg for old
             cur_seg->seg_meta.main_seg_ptr = new_main_ptr1;
@@ -361,8 +361,8 @@ namespace MYHASH
             // cur_seg->seg_meta.sign = !cur_seg->seg_meta.sign; // 对old cur_seg的清空放到最后?保证同步。
             memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(uint64_t) * 16);
             wo_wait_conn->pure_write(cur_seg->seg_meta.main_seg_ptr, seg_rmr.rkey, new_seg_1, sizeof(Slot) * off1, lmr->lkey);
-            co_await conns[0]->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(CurSegMeta), lmr->lkey);
-            // co_await conns[0]->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
+            co_await conn->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(CurSegMeta), lmr->lkey);
+            // co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
             //         log_err("[%lu:%lu:%lu]更新旧的CurSeg->seg_meta.local_depth: %lu", cli_id, coro_id, this->key_num, new_cur_seg->seg_meta.local_depth);
 
             // 4.4 Change Sign (Equal to unlock this segment)
@@ -398,7 +398,7 @@ namespace MYHASH
         //     log_err("新的main_seg_len从原来的%lu，去除掉过时条目后减少为%lu", main_seg_size / sizeof(Slot) + SLOT_PER_SEG, new_seg_len);
         this->offset[seg_loc].offset = 0;
         memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(uint64_t) * 16);
-        co_await conns[0]->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
+        co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
 
         // 5.2 Update new-main-ptr for DirEntries
         uint64_t stride = (1llu) << (dir->global_depth - local_depth);
@@ -424,7 +424,7 @@ namespace MYHASH
                 dentry_ptr = seg_rmr.raddr + sizeof(uint64_t) + (cur_seg_loc + offset) * sizeof(DirEntry);
                 // Update
                 // 暂时还是co_await吧
-                co_await conns[0]->write(dentry_ptr, seg_rmr.rkey, &dir->segs[cur_seg_loc + offset], sizeof(DirEntry), lmr->lkey);
+                co_await conn->write(dentry_ptr, seg_rmr.rkey, &dir->segs[cur_seg_loc + offset], sizeof(DirEntry), lmr->lkey);
                 // conn->pure_write(dentry_ptr, seg_rmr.rkey,&dir->segs[cur_seg_loc+offset], sizeof(DirEntry), lmr->lkey);
                 // log_err("[%lu:%lu:%lu]Merge At segloc:%lu depth:%lu with old_main_ptr:%lx new_main_ptr:%lx",cli_id,coro_id,this->key_num,cur_seg_loc+offset,local_depth,main_seg_ptr,new_main_ptr);
             }

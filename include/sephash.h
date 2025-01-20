@@ -264,7 +264,7 @@ class Client : public BasicDB
 
     // rdma structs
     rdma_client *cli;
-    std::vector<rdma_conn *> conns{nullptr}; // conns[0]是初始化时外部传进来的conn，其他的是在get_conn中动态创建的
+    rdma_conn *conn;
     rdma_conn *wo_wait_conn;
     rdma_rmr seg_rmr;
     struct ibv_mr *lmr;
