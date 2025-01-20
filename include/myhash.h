@@ -10,14 +10,17 @@ namespace MYHASH
     {
     public:
 #if RDMA_SIGNAL
-        Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_xrc_conn, rdma_conn *_wowait_conn,
-               uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id) : SEPHASH::Client(config, _lmr, _cli, _conn, _wowait_conn, _machine_id, _cli_id, _coro_id), xrc_conn(_xrc_conn)
+        Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn,
+               uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id) : SEPHASH::Client(config, _lmr, _cli, _conn, _wowait_conn, _machine_id, _cli_id, _coro_id)
         {
+            xrc_conn = _cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::XRC_SEND, 0}); // TODO: MyHash自己用cli连接，不外部传入
+            log_err("MyHash Client: xrc_conn qp_num:%u", xrc_conn->qp->qp_num);
         }
-        // 将旧构造函数声明为delete，禁止使用
-        Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn,
-               rdma_conn *_wowait_conn, uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id) = delete;
 #endif
+        ~Client()
+        {
+            delete xrc_conn;
+        }
         task<> insert(Slice *key, Slice *value);
 
     protected:
