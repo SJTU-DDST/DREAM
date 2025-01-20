@@ -14,7 +14,6 @@ namespace MYHASH
                uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id) : SEPHASH::Client(config, _lmr, _cli, _conn, _wowait_conn, _machine_id, _cli_id, _coro_id)
         {
             xrc_conn = _cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::XRC_SEND, 0}); // TODO: MyHash自己用cli连接，不外部传入
-            log_err("MyHash Client: xrc_conn qp_num:%u", xrc_conn->qp->qp_num);
         }
 #endif
         ~Client()

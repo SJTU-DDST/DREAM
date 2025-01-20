@@ -22,15 +22,10 @@
 // #define ALLOW_KEY_OVERLAP
 Config config;
 uint64_t load_num;
-#if MODIFIED
-using ClientType = MYHASH::Client;
-using ServerType = MYHASH::Server;
-using Slice = MYHASH::Slice;
-#else
-using ClientType = SEPHASH::Client;
-using ServerType = SEPHASH::Server;
-using Slice = SEPHASH::Slice;
-#endif
+
+using ClientType = HASH_TYPE::Client;
+using ServerType = HASH_TYPE::Server;
+using Slice = HASH_TYPE::Slice;
 
 inline uint64_t GenKey(uint64_t key)
 {

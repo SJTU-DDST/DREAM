@@ -1,33 +1,22 @@
 import os
 import subprocess
 import shutil
+import re
 
-def set_hash_type(hash_type, old_hash_type = "SEPHASH"):
+def set_hash_type(hash_type):
     # 修改 ser_cli.cc 文件中的 hash 类型
-    if hash_type != "MYHASH":
-        ser_cli_cc_path = "../test/ser_cli.cc"
-        with open(ser_cli_cc_path, "r") as file:
-            data = file.read()
-            data = data.replace(f"using ClientType = {old_hash_type}::Client;", f"using ClientType = {hash_type}::Client;")
-            data = data.replace(f"using ServerType = {old_hash_type}::Server;", f"using ServerType = {hash_type}::Server;")
-            data = data.replace(f"using Slice = {old_hash_type}::Slice;", f"using Slice = {hash_type}::Slice;")
-        with open(ser_cli_cc_path, "w") as file:
-            file.write(data)
-
     common_h_path = "../include/common.h"
     with open(common_h_path, "r") as file:
         data = file.read()
+        data = re.sub(r"#define HASH_TYPE \w+", f"#define HASH_TYPE {hash_type}", data)
         if hash_type == "MYHASH":
             data = data.replace("#define MODIFIED 0", "#define MODIFIED 1")
         else:
             data = data.replace("#define MODIFIED 1", "#define MODIFIED 0")
-
     with open(common_h_path, "w") as file:
         file.write(data)
 
-def reset_hash_type(old_hash_type):
-    if old_hash_type != "MYHASH":
-        set_hash_type("SEPHASH", old_hash_type)
+def reset_hash_type():
     set_hash_type("MYHASH")
 
 # 定义 num_cli 列表
@@ -69,5 +58,5 @@ for hash_type in hash_types:
 
     print(f"run {hash_type} done")
     # TODO: 提取数据，修复RACE
-    reset_hash_type(hash_type)
+    reset_hash_type()
 

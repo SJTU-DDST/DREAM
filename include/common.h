@@ -24,6 +24,7 @@
 #include <condition_variable>
 #include <mutex>
 
+#define HASH_TYPE MYHASH
 #define MODIFIED 1
 #if MODIFIED
 // Modified
