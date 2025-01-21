@@ -87,20 +87,18 @@ namespace MYHASH
         }
         log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", xrc_conn->qp->qp_num, segloc, seg_meta[segloc].srq_num);
         assert_require(seg_meta[segloc].srq_num > 0);
-        {
 #if SPLIT_LOCAL_LOCK
-            std::shared_lock<std::shared_mutex> read_lock(segloc_locks[segloc]);
+        std::shared_lock<std::shared_mutex> read_lock(segloc_locks[segloc]);
 #endif
 #if CORO_DEBUG
-            auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, xrc_conn, seg_rmr.rkey, lmr->lkey));
+        auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, xrc_conn, seg_rmr.rkey, lmr->lkey));
 #else
-            auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
+        auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
 #endif
 #if SPLIT_LOCAL_LOCK
-            read_lock.unlock();
+        read_lock.unlock();
 #endif
-            co_await std::move(send_slot);
-        }
+        co_await std::move(send_slot);
         log_test("发送slot到segloc:%lu srq_num:%u完成", segloc, seg_meta[segloc].srq_num);
         perf.push_perf("send_slot");
         // log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
