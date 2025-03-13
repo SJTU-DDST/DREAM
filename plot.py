@@ -20,7 +20,7 @@ def parse_txt_file(file_path):
     
     return iops, avg_latency, p99_latency
 
-def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data):
+def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data, data_dir):
     fig, axs = plt.subplots(1, 3, figsize=(10, 3))
     
     for hash_type, values in iops_data.items():
@@ -48,9 +48,9 @@ def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data):
     axs[0].grid(True)
     
     axs[1].set_xlabel('Number of Threads')
-    axs[1].set_ylabel('Latency (us, log scale)')
+    axs[1].set_ylabel('Latency (us)')
     axs[1].set_title('Average Latency')
-    axs[1].set_yscale('log')  # 使用对数坐标轴
+    # axs[1].set_yscale('log')  # 使用对数坐标轴
     axs[1].legend()
     axs[1].grid(True)
     
@@ -62,32 +62,52 @@ def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data):
     axs[2].grid(True)
     
     plt.tight_layout()
-    plt.savefig('../out/combined_metrics.png')
+    plt.savefig(f'../out/{data_dir}.png')
 
-def main(data_dir):
-    hash_types = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+def main(data_root_dir):
+    data_dirs = [d for d in os.listdir(data_root_dir) if os.path.isdir(os.path.join(data_root_dir, d))]
     
-    iops_data = {}
-    avg_latency_data = {}
-    p99_latency_data = {}
-    
-    for hash_type in hash_types:
-        iops_data[hash_type] = {}
-        avg_latency_data[hash_type] = {}
-        p99_latency_data[hash_type] = {}
+    for data_dir in data_dirs:
+        hash_types = [d for d in os.listdir(os.path.join(data_root_dir, data_dir)) if os.path.isdir(os.path.join(data_root_dir, data_dir, d))]
         
-        hash_dir = os.path.join(data_dir, hash_type)
-        thread_dirs = [d for d in os.listdir(hash_dir) if os.path.isdir(os.path.join(hash_dir, d))]
+        iops_data = {}
+        avg_latency_data = {}
+        p99_latency_data = {}
         
-        for thread_dir in thread_dirs:
-            thread_count = int(thread_dir)
-            file_path = os.path.join(hash_dir, thread_dir, 'out192.168.98.71.txt')
-            iops, avg_latency, p99_latency = parse_txt_file(file_path)
-            iops_data[hash_type][thread_count] = {'iops': iops}
-            avg_latency_data[hash_type][thread_count] = {'avg_latency': avg_latency}
-            p99_latency_data[hash_type][thread_count] = {'p99_latency': p99_latency}
-    
-    plot_data_subplots(iops_data, avg_latency_data, p99_latency_data)
+        for hash_type in hash_types:
+            iops_data[hash_type] = {}
+            avg_latency_data[hash_type] = {}
+            p99_latency_data[hash_type] = {}
+            
+            hash_dir = os.path.join(data_root_dir, data_dir, hash_type)
+            thread_dirs = [d for d in os.listdir(hash_dir) if os.path.isdir(os.path.join(hash_dir, d))]
+            
+            for thread_dir in thread_dirs:
+                thread_count = int(thread_dir)
+                file_paths = [os.path.join(hash_dir, thread_dir, f) for f in os.listdir(os.path.join(hash_dir, thread_dir)) if f.startswith('out')]
+                
+                iops_list = []
+                avg_latency_list = []
+                p99_latency_list = []
+                
+                for file_path in file_paths:
+                    iops, avg_latency, p99_latency = parse_txt_file(file_path)
+                    if iops is not None:
+                        iops_list.append(iops)
+                    if avg_latency is not None:
+                        avg_latency_list.append(avg_latency)
+                    if p99_latency is not None:
+                        p99_latency_list.append(p99_latency)
+                
+                avg_iops = sum(iops_list) / len(iops_list) if iops_list else None
+                avg_avg_latency = sum(avg_latency_list) / len(avg_latency_list) if avg_latency_list else None
+                avg_p99_latency = sum(p99_latency_list) / len(p99_latency_list) if p99_latency_list else None
+                
+                iops_data[hash_type][thread_count] = {'iops': avg_iops}
+                avg_latency_data[hash_type][thread_count] = {'avg_latency': avg_avg_latency}
+                p99_latency_data[hash_type][thread_count] = {'p99_latency': avg_p99_latency}
+        
+        plot_data_subplots(iops_data, avg_latency_data, p99_latency_data, data_dir)
 
 if __name__ == '__main__':
-    main('../data/data_uniform_insert_10M')
+    main('../data')

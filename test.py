@@ -20,8 +20,10 @@ def reset_hash_type():
     set_hash_type("MYHASH")
 
 # 定义 num_cli 列表
-num_cli_list = [1, 2, 4, 8, 16, 24, 32, 40, 48, 56]
-hash_types = ["SEPHASH", "Plush", "MYHASH", "RACE"]
+# num_cli_list = [1, 2, 4, 8, 16, 24, 32, 40, 48]
+# hash_types = ["MYHASH", "SEPHASH", "Plush", "RACE"]
+num_cli_list = [16]
+hash_types = ["SEPHASH"]
 
 for hash_type in hash_types:
     base_dir = f"data/{hash_type}"
