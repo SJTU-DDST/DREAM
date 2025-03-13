@@ -23,7 +23,7 @@ def reset_hash_type():
 # num_cli_list = [1, 2, 4, 8, 16, 24, 32, 40, 48]
 # hash_types = ["MYHASH", "SEPHASH", "Plush", "RACE"]
 num_cli_list = [16]
-hash_types = ["SEPHASH"]
+hash_types = ["MYHASH"]
 
 for hash_type in hash_types:
     base_dir = f"data/{hash_type}"
