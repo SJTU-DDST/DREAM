@@ -558,7 +558,7 @@ rdma_coro *rdma_worker::alloc_coro(uint16_t conn_id DEBUG_LOCATION_DEFINE DEBUG_
     res->ctx = conn_id;
 #if CORO_DEBUG
     res->location = location;
-    res->desc = desc;
+    res->coro_desc = desc;
     res->start_time = std::chrono::steady_clock::now();
 #endif
     return res;
@@ -682,11 +682,11 @@ void rdma_worker::worker_loop()
         auto seconds = std::chrono::duration_cast<std::chrono::seconds>(current_time - last_poll_time).count();
         if (seconds != last_seconds) {
             if (seconds == 30) {
-                log_err("卡住了%lu秒，输出所有segs=%lu的信息", seconds, this->_max_segloc);
+                log_err("卡住了%lu秒，输出所有segs=%lu的信息，global_depth: %lu", seconds, this->_max_segloc, dir->global_depth);
                 for (int i = 0; i <= this->_max_segloc; i++) {
                     if (dir == nullptr || dir->segs == nullptr || !dir->segs[i].cur_seg_ptr) break;
                     CurSeg *cur_seg = reinterpret_cast<CurSeg *>(dir->segs[i].cur_seg_ptr);
-                    cur_seg->seg_meta.print(std::format("第{}个CurSeg的meta地址{}", i, static_cast<void *>(&cur_seg->seg_meta)));
+                    cur_seg->seg_meta.print(std::format("segs[{}]的meta地址{}", i, static_cast<void *>(&cur_seg->seg_meta)));
                 }
             }
         }
@@ -770,7 +770,14 @@ void rdma_worker::worker_loop()
                 } else {
                     if (segloc >= srqs.size() || !srqs[segloc])
                     {
-                        log_err("srqs[%u/%u]不存在", segloc, srqs.size());    
+                        log_err("重新post RECV时，发现srqs[%u/%u]不存在，_max_segloc: %u，dir的global_depth: %u", segloc, srqs.size(), _max_segloc, dir->global_depth);
+                        if (dir->segs[segloc].cur_seg_ptr)
+                        {
+                            CurSeg *cur_seg = reinterpret_cast<CurSeg *>(dir->segs[segloc].cur_seg_ptr);
+                            cur_seg->seg_meta.print(std::format("第{}个CurSeg的meta地址{}", segloc, static_cast<void *>(&cur_seg->seg_meta)));
+                        }
+                        else
+                            log_err("seg[%d] 不存在", segloc);
                     }
                     assert_require(segloc < srqs.size() && srqs[segloc])
                     for (int i = 0; i < SLOT_PER_SEG; i++)
@@ -1511,29 +1518,30 @@ uint64_t rdma_faa_future::await_resume()
     return *(uint64_t *)_res_buf;
 }
 
-rdma_buffer_future rdma_conn::read(uint64_t raddr, uint32_t rkey, uint32_t len DEBUG_LOCATION_DEFINE)
+rdma_buffer_future rdma_conn::read(uint64_t raddr, uint32_t rkey, uint32_t len DEBUG_LOCATION_DEFINE DEBUG_CORO_DEFINE)
 {
     auto [buf, sge, wr] = alloc_many(len, sizeof(ibv_sge), sizeof(ibv_send_wr));
     assert_check(buf);
     auto send_wr = (ibv_send_wr *)wr;
     fill_rw_wr<IBV_WR_RDMA_READ>(send_wr, (ibv_sge *)sge, raddr, rkey, buf, len, lkey());
-    auto fur = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
+    auto fur = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG DEBUG_CORO_CALL_ARG);
     return rdma_buffer_future(fur.cor, fur.conn, buf);
 }
 
-rdma_future rdma_conn::read(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey DEBUG_LOCATION_DEFINE)
+rdma_future rdma_conn::read(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey DEBUG_LOCATION_DEFINE DEBUG_CORO_DEFINE)
 {
-    if(raddr==0){
-        log_err("zero raddr");
-        // exit(-1);
-        int* ptr = NULL;
-        *ptr = 10; // 在这里引发段错误
-    }
+    // if(raddr==0){
+    //     log_err("zero raddr");
+    //     // exit(-1);
+    //     int* ptr = NULL;
+    //     *ptr = 10; // 在这里引发段错误
+    // }
+    assert_check(laddr);
     auto [sge, wr] = alloc_many(sizeof(ibv_sge), sizeof(ibv_send_wr));
     assert_check(sge);
     auto send_wr = (ibv_send_wr *)wr;
     fill_rw_wr<IBV_WR_RDMA_READ>(send_wr, (ibv_sge *)sge, raddr, rkey, laddr, len, lkey);
-    auto res = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG);
+    auto res = do_send(send_wr, send_wr DEBUG_LOCATION_CALL_ARG DEBUG_CORO_CALL_ARG);
     free_buf(sge);
     return res;
 }

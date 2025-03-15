@@ -18,9 +18,9 @@
 #define DEBUG_LOCATION_CALL_ARG , location
 #define DEBUG_LOCATION_DEFINE , const std::source_location &location
 
-#define DEBUG_DESC_DECL , rdma_coro_desc desc = rdma_coro_desc()
+#define DEBUG_DESC_DECL , const std::optional<std::string> &desc = std::nullopt 
 #define DEBUG_CORO_CALL_ARG , desc
-#define DEBUG_CORO_DEFINE , rdma_coro_desc desc
+#define DEBUG_CORO_DEFINE , const std::optional<std::string> &desc
 #else
 #define DEBUG_LOCATION_DECL
 #define DEBUG_LOCATION_CALL_ARG
@@ -111,7 +111,7 @@ struct CurSegMeta
 
     void print(std::string desc = "")
     {
-        log_err("%s slot_cnt:%lu local_depth:%lu main_seg_ptr:%lx main_seg_len:%lu srq_num:%u", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len, srq_num);
+        log_err("%s slot_cnt:%lu LD:%lu MS_ptr:%lx MS_len:%lu srq_num:%u", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len, srq_num);
     }
 } __attribute__((aligned(1)));
 
@@ -341,20 +341,6 @@ enum
 };
 
 const uint16_t rdma_coro_none = ~0;
-struct rdma_coro_desc
-{
-    uint64_t cli_id{0}, coro_id{0}, segloc{0};
-    int send_cnt{0};
-    rdma_conn *conn{nullptr};
-    uint32_t rkey{0}, lkey{0};
-
-    rdma_coro_desc(uint64_t cli_id = 0, uint64_t coro_id = 0, uint64_t segloc = 0,
-                   int send_cnt = 0, rdma_conn *conn = nullptr, uint32_t rkey = 0, uint32_t lkey = 0)
-        : cli_id(cli_id), coro_id(coro_id), segloc(segloc), send_cnt(send_cnt),
-          conn(conn), rkey(rkey), lkey(lkey)
-    {
-    }
-};
 
 struct rdma_coro
 {
@@ -365,13 +351,20 @@ struct rdma_coro
     std::coroutine_handle<> resume_handler{nullptr};
 #if CORO_DEBUG // 会影响SIZE
     std::source_location location;
-    rdma_coro_desc desc;
+
+    std::optional<std::string> coro_desc;
     std::chrono::steady_clock::time_point start_time;
 #endif
     void print(std::string desc = "")
     {
 #if CORO_DEBUG
-        log_err("%s: Coro ID: %u, Context ID: %u, File: %s:%d, Desc: %s", desc.c_str(), this->id, this->ctx, this->location.file_name(), this->location.line(), std::format("[{}:{}]segloc:{}第{}次SEND slot", this->desc.cli_id, this->desc.coro_id, this->desc.segloc, this->desc.send_cnt).c_str());
+        log_err("%s: [CoroID:%u,CtxID:%u] %s:%d%s",
+                desc.c_str(),
+                this->id,
+                this->ctx,
+                this->location.file_name(),
+                this->location.line(),
+                this->coro_desc.has_value() ? (" " + this->coro_desc.value()).c_str() : " 无描述");
 #else
         log_err("%s: Coro ID: %u, Context ID: %u", desc.c_str(), this->id, this->ctx);
 #endif
@@ -708,12 +701,13 @@ public:
     rdma_future do_send(ibv_send_wr *wr_begin, ibv_send_wr *wr_end DEBUG_LOCATION_DECL DEBUG_DESC_DECL);
     rdma_future do_recv(ibv_recv_wr *wr DEBUG_LOCATION_DECL);
 
-    rdma_buffer_future read(uint64_t raddr, uint32_t rkey, uint32_t len DEBUG_LOCATION_DECL);
-    rdma_buffer_future read(const rdma_rmr &remote_mr, uint32_t offset, uint32_t len DEBUG_LOCATION_DECL)
-    { return read(remote_mr.raddr + offset, remote_mr.rkey, len DEBUG_LOCATION_CALL_ARG); }
-    rdma_future read(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey DEBUG_LOCATION_DECL);
-    rdma_future read(const rdma_rmr &remote_mr, uint32_t offset, void *laddr, uint32_t len, uint32_t lkey DEBUG_LOCATION_DECL)
-    { return read(remote_mr.raddr + offset, remote_mr.rkey, laddr, len, lkey DEBUG_LOCATION_CALL_ARG); }
+    rdma_buffer_future read(uint64_t raddr, uint32_t rkey, uint32_t len DEBUG_LOCATION_DECL DEBUG_DESC_DECL);
+    rdma_buffer_future read(const rdma_rmr &remote_mr, uint32_t offset, uint32_t len DEBUG_LOCATION_DECL DEBUG_DESC_DECL)
+    { return read(remote_mr.raddr + offset, remote_mr.rkey, len DEBUG_LOCATION_CALL_ARG DEBUG_CORO_CALL_ARG); }
+    rdma_future read(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey DEBUG_LOCATION_DECL DEBUG_DESC_DECL);
+    rdma_future read(const rdma_rmr &remote_mr, uint32_t offset, void *laddr, uint32_t len, uint32_t lkey DEBUG_LOCATION_DECL DEBUG_DESC_DECL)
+    { return read(remote_mr.raddr + offset, remote_mr.rkey, laddr, len, lkey DEBUG_LOCATION_CALL_ARG DEBUG_CORO_CALL_ARG); }
+
     rdma_future write(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t len, uint32_t lkey = 0 DEBUG_LOCATION_DECL);
     rdma_future write(const rdma_rmr &remote_mr, uint32_t offset, void *laddr, uint32_t len, uint32_t lkey = 0 DEBUG_LOCATION_DECL)
     { return write(remote_mr.raddr + offset, remote_mr.rkey, laddr, len, lkey DEBUG_LOCATION_CALL_ARG); }

@@ -51,6 +51,7 @@ def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data, data_dir):
     axs[1].set_ylabel('Latency (us)')
     axs[1].set_title('Average Latency')
     # axs[1].set_yscale('log')  # 使用对数坐标轴
+    axs[1].set_ylim(0, 200)
     axs[1].legend()
     axs[1].grid(True)
     

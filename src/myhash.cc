@@ -35,25 +35,33 @@ namespace MYHASH
         uint64_t segloc = get_seg_loc(pattern, dir->global_depth);
         if (dir->segs[segloc].local_depth != dir->global_depth)
         {
-            uint64_t root_segloc = get_seg_loc(pattern, dir->segs[segloc].local_depth);
-            if (dir->segs[root_segloc].local_depth == dir->segs[segloc].local_depth)
+            uint64_t ancestor_segloc = segloc;
+            uint64_t current_depth = dir->global_depth;
+            while (current_depth > 0)
             {
-                // log_err("[%lu:%lu]本地还没分裂，segloc:%lu用root_segloc:%lu代替", cli_id, coro_id, segloc, root_segloc);
-                segloc = root_segloc; // 如果local_depth<global_depth，会有多个segloc对应一个seg，此时将segloc最小的作为root_segloc用于send
-            } else co_await check_gd(segloc);
-        }
-        uintptr_t segptr = dir->segs[segloc].cur_seg_ptr;
-        if (segptr == 0)
-        {
-            // log_err("[%lu:%lu:%lu]本地segloc:%lu的segptr=0, 客户端第一次访问这个CurSeg？",cli_id,coro_id,this->key_num,segloc);
-            segptr = co_await check_gd(segloc); // 现在只会修改main_seg_len和main_seg_ptr
-            uint64_t new_seg_loc = get_seg_loc(pattern, dir->global_depth);
-            if (new_seg_loc != segloc)
-            {
-                retry_reason = 1;
-                goto Retry;
+                // 向上查找一级
+                current_depth--;
+                uint64_t parent_segloc = get_seg_loc(pattern, current_depth);
+                log_test("[%lu:%lu]向上查找一级，当前深度:%lu，当前段%lu, LD:%lu, 根段%lu, LD:%lu", cli_id, coro_id, current_depth, ancestor_segloc, dir->segs[ancestor_segloc].local_depth, parent_segloc, dir->segs[parent_segloc].local_depth);
+
+                // 检查找到的段的LD是否为当前检查的深度
+                if (dir->segs[ancestor_segloc].local_depth == 0) {
+                    log_test("[%lu:%lu]段%lu的LD:%lu不存在，继续向上查找根段%lu, LD:%lu", cli_id, coro_id, ancestor_segloc, dir->segs[ancestor_segloc].local_depth, parent_segloc, dir->segs[parent_segloc].local_depth);
+                    ancestor_segloc = parent_segloc;
+                }
+                else if (dir->segs[ancestor_segloc].local_depth == dir->segs[parent_segloc].local_depth && dir->segs[ancestor_segloc] == dir->segs[parent_segloc]) {
+                    log_test("[%lu:%lu]段%lu的LD:%lu和根段%lu的LD:%lu匹配，并且是同一个段，优先使用根段", cli_id, coro_id, ancestor_segloc, dir->segs[ancestor_segloc].local_depth, parent_segloc, dir->segs[parent_segloc].local_depth);
+                    ancestor_segloc = parent_segloc;
+                } else {
+                    log_test("[%lu:%lu]段%lu的LD:%lu和根段%lu的LD:%lu不是同一个段，使用这个段", cli_id, coro_id, ancestor_segloc, dir->segs[ancestor_segloc].local_depth, parent_segloc, dir->segs[parent_segloc].local_depth);
+                    break;
+                }
             }
+            segloc = ancestor_segloc;
         }
+
+        uintptr_t segptr = dir->segs[segloc].cur_seg_ptr;
+        assert_require(segptr != 0);
 
         // 4. write slot
         // a. Init Slot
@@ -80,9 +88,13 @@ namespace MYHASH
         while (!seg_meta[segloc].srq_num)
         {
             CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+#if CORO_DEBUG
+            co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, tmp_seg_meta, sizeof(CurSegMeta), lmr->lkey, std::source_location::current(), std::format("[{}:{}]segloc:{}读取meta地址{}", cli_id, coro_id, segloc, segptr + sizeof(uint64_t)));
+#else
             co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, tmp_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+#endif
             memcpy(&seg_meta[segloc], tmp_seg_meta, sizeof(CurSegMeta));
-            log_test("读取到segloc:%lu的meta地址%llx srq_num:%u", segloc, segptr + sizeof(uint64_t), seg_meta[segloc].srq_num);
+            log_test("读取到segloc:%lu的meta地址%llx srq_num:%u global_depth:%lu local_depth:%lu", segloc, segptr + sizeof(uint64_t), seg_meta[segloc].srq_num, dir->global_depth, seg_meta[segloc].local_depth);
             // seg_meta[segloc].print(std::format("seg_meta[{}]在读取srq_num后:", segloc));
         }
         log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", xrc_conn->qp->qp_num, segloc, seg_meta[segloc].srq_num);
@@ -91,7 +103,10 @@ namespace MYHASH
         std::shared_lock<std::shared_mutex> read_lock(segloc_locks[segloc]);
 #endif
 #if CORO_DEBUG
-        auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, std::source_location::current(), rdma_coro_desc(cli_id, coro_id, segloc, send_cnt + 1, xrc_conn, seg_rmr.rkey, lmr->lkey));
+        auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, 
+                                       std::source_location::current(), 
+                                       std::format("[{}:{}]segloc:{}第{}次SEND slot", 
+                                                  cli_id, coro_id, segloc, send_cnt + 1));
 #else
         auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
 #endif
@@ -176,7 +191,7 @@ namespace MYHASH
 
     task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_meta)
     {
-        log_merge("[%lu:%lu:%lu]开始分裂/合并，seg_loc:%lx", cli_id, coro_id, this->key_num, seg_loc);
+        log_merge("[%lu:%lu:%lu]开始分裂/合并，seg_loc:%lu", cli_id, coro_id, this->key_num, seg_loc);
         sum_cost.start_merge();
         sum_cost.start_split();
         uint64_t local_depth = old_seg_meta->local_depth;
@@ -323,10 +338,10 @@ namespace MYHASH
 
                     // if (local_depth == dir->global_depth){
                     //     // global
-                    //     log_err("[%lu:%lu:%lu]Global SPlit At segloc:%lx depth:%lu to :%lu with new seg_ptr:%lx new_main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr,i & 1 ?new_main_ptr2:new_main_ptr1);
+                    //     log_err("[%lu:%lu:%lu]Global SPlit At segloc:%lu depth:%lu to :%lu with new seg_ptr:%lx new_main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr,i & 1 ?new_main_ptr2:new_main_ptr1);
                     // }else{
                     //     // local
-                    //     log_err("[%lu:%lu:%lu]Local SPlit At segloc:%lx depth:%lu to :%lu with new seg_ptr:%lx new main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr, i & 1 ? new_main_ptr2:new_main_ptr1);
+                    //     log_err("[%lu:%lu:%lu]Local SPlit At segloc:%lu depth:%lu to :%lu with new seg_ptr:%lx new main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr, i & 1 ? new_main_ptr2:new_main_ptr1);
                     // }
                 }
             }
