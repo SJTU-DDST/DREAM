@@ -31,7 +31,11 @@ namespace MYHASH
         static std::vector<std::shared_mutex> segloc_locks;
 #endif
         task<> Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_meta);
+#if READ_FULL_KEY_ON_FP_COLLISION
+        task<uint64_t> merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth);
+#else
         uint64_t merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth);
+#endif
     };
 
     class Server : public SEPHASH::Server

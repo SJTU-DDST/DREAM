@@ -84,8 +84,37 @@ struct Slot
     }
     void print(const std::string &message)
     {
-        log_err("%s\t fp:%02x\t fp_2:%02x\t len:%d\t sign:%d\t dep:%02d\t offset:%012lx\t local_depth:%d\t size:%ld\n",
+        log_err("%s\t fp:%02x\t fp_2:%02x\t len:%d\t sign:%d\t dep:%02d\t offset:%012lx\t local_depth:%d\t size:%ld",
                message.c_str(), fp, fp_2, len, sign, dep, offset, local_depth, sizeof(Slot));
+    }
+    
+    std::string to_string(uint64_t slot_id = -1) const
+    {
+        std::stringstream ss;
+        if (slot_id != -1)
+            ss << "slot_id:" << slot_id << "\t";
+        ss << "fp:" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(fp) << "\t"
+           << "fp_2:" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(fp_2) << "\t"
+           << "len:" << std::dec << static_cast<int>(len) << "\t"
+           << "sign:" << static_cast<int>(sign) << "\t"
+           << "dep:" << std::setw(2) << static_cast<int>(dep) << "\t"
+           << "offset:" << std::hex << std::setw(12) << std::setfill('0') << offset << "\t"
+           << "local_depth:" << std::dec << static_cast<int>(local_depth) << "\t"
+           << "size:" << sizeof(Slot);
+        return ss.str();
+    }
+    
+    bool is_valid() const
+    {
+        // Check if offset is within valid range: 100 <= offset <= 99999999999
+        if (offset < 100 || offset > 99999999999ULL)
+            return false;
+            
+        // Check if local_depth is valid: 0 < local_depth <= 16
+        if (local_depth == 0 || local_depth > 16)
+            return false;
+            
+        return true;
     }
 } __attribute__((aligned(1)));
 
@@ -120,6 +149,34 @@ struct CurSeg
     uint64_t split_lock;
     CurSegMeta seg_meta;
     Slot slots[SLOT_PER_SEG];
+
+    void print(std::string desc = "")
+    {
+        // log_err("%s split_lock:%lu", desc.c_str(), split_lock);
+        seg_meta.print(desc + " CurSeg meta");
+        log_err("%s slots count: %lu", desc.c_str(), seg_meta.slot_cnt);
+        for (uint64_t i = 0; i < SLOT_PER_SEG; i++) {
+            slots[i].print(i);
+        }
+    }
+    
+    std::string to_string(std::string desc = "") const
+    {
+        std::stringstream ss;
+        ss << desc << " slots count: " << seg_meta.slot_cnt << std::endl;
+        for (uint64_t i = 0; i < SLOT_PER_SEG; i++) {
+            ss << "slot_id:" << i << "\t"
+               << "fp:" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(slots[i].fp) << "\t"
+               << "fp_2:" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(slots[i].fp_2) << "\t"
+               << "len:" << std::dec << static_cast<int>(slots[i].len) << "\t"
+               << "sign:" << static_cast<int>(slots[i].sign) << "\t"
+               << "dep:" << std::setw(2) << static_cast<int>(slots[i].dep) << "\t"
+               << "offset:" << std::hex << std::setw(12) << std::setfill('0') << slots[i].offset << "\t"
+               << "local_depth:" << std::dec << static_cast<int>(slots[i].local_depth) << "\t"
+               << "size:" << sizeof(Slot) << std::endl;
+        }
+        return ss.str();
+    }
 } __attribute__((aligned(1)));
 
 constexpr uint64_t MAX_FP_INFO = 256;

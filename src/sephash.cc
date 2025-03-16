@@ -385,14 +385,22 @@ Retry:
     // 2. read segment_meta && segment_slot concurrently
     // a. read meta
     CurSegMeta *remote_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+#if CORO_DEBUG
+    auto read_meta = conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, remote_seg_meta, sizeof(CurSegMeta), lmr->lkey, std::source_location::current(), std::format("[{}:{}]segloc:{}读取meta地址{}", cli_id, coro_id, segloc, segptr + sizeof(uint64_t)));
+#else
     auto read_meta = conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, remote_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+#endif
     // b. read slots
     Slot *seg_slots = (Slot *)alloc.alloc(sizeof(Slot) * 2 * SLOT_BATCH_SIZE); // 一次只读取16个slot
     uint64_t seg_offset = this->offset[segloc].offset % SLOT_PER_SEG;
     uintptr_t seg_slots_ptr = segptr + sizeof(uint64_t) + sizeof(CurSegMeta) + seg_offset * sizeof(Slot);
     uint64_t slots_len = SLOT_PER_SEG - seg_offset;
     slots_len = (slots_len < (2 * SLOT_BATCH_SIZE)) ? slots_len : SLOT_BATCH_SIZE;
+#if CORO_DEBUG
+    auto read_slots = wo_wait_conn->read(seg_slots_ptr, seg_rmr.rkey, seg_slots, sizeof(Slot) * slots_len, lmr->lkey, std::source_location::current(), std::format("[{}:{}]segloc:{}读取slots地址{}", cli_id, coro_id, segloc, seg_slots_ptr));
+#else
     auto read_slots = wo_wait_conn->read(seg_slots_ptr, seg_rmr.rkey, seg_slots, sizeof(Slot) * slots_len, lmr->lkey);
+#endif
     // c. 直接通过main_seg_ptr来判断一致性
     co_await std::move(read_meta);
     if(remote_seg_meta->local_depth > dir->global_depth){

@@ -178,6 +178,32 @@ KVBlock *InitKVBlock(Slice *key, Slice *value, Alloc *alloc)
 struct MainSeg
 {
     Slot slots[0];
+    
+    void print(uint64_t length) {
+        printf("MainSeg with %lu slots\n", length);
+        for (uint64_t i = 0; i < length; i++) {
+            printf("[%lu] ", i);
+            slots[i].print();
+        }
+        printf("\n");
+    }
+    
+    std::string to_string(uint64_t length) {
+        std::stringstream ss;
+        ss << "MainSeg with " << length << " slots" << std::endl;
+        for (uint64_t i = 0; i < length; i++) {
+            ss << "[" << i << "] ";
+            // Assuming Slot::print() prints to stdout, we need a way to capture its output
+            // Instead, we'll add the relevant slot fields directly
+            ss << "fp:" << (int)slots[i].fp << "\t";
+            ss << "fp_2:" << (int)slots[i].fp_2 << "\t";
+            ss << "len:" << (int)slots[i].len << "\t";
+            ss << "sign:" << (int)slots[i].sign << "\t";
+            ss << "dep:" << (int)slots[i].dep << "\t";
+            ss << "offset:" << std::hex << slots[i].offset << std::dec << std::endl;
+        }
+        return ss.str();
+    }
 }__attribute__((aligned(1)));
 
 // struct FpInfo{ 

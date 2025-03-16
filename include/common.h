@@ -23,6 +23,7 @@
 #include <utility>
 #include <condition_variable>
 #include <mutex>
+#include <iomanip>
 
 #define HASH_TYPE MYHASH
 #define MODIFIED 1
@@ -55,6 +56,7 @@
 #endif
 
 // Config
+#define READ_FULL_KEY_ON_FP_COLLISION 1 // fp相同时读取完整key比较
 #define USE_DM_MR 1         // CLEVEL使用DM MR，目前设备不支持
 #define LOW_MIN_RTR_TIMER 1 // 低延迟模式
 #define CLOSE_SOCKET 0 // 使用后关闭socket，目前只在server关闭，使用XRC后已经不需要
