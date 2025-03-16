@@ -468,23 +468,6 @@ namespace MYHASH
     uint64_t Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth)
 #endif
     {
-        // Check if both input arrays have valid slots
-        // for (uint64_t i = 0; i < len; i++) {
-        //     if (!data[i].is_valid()) {
-        //         log_err("[%lu:%lu:%lu] Invalid slot detected in data[%lu]", cli_id, coro_id, this->key_num, i);
-        //         data[i].print(std::format("[{}:{}:{}]Invalid data slot", cli_id, coro_id, this->key_num));
-        //         assert(false);
-        //     }
-        // }
-
-        // for (uint64_t i = 0; i < old_seg_len; i++) {
-        //     if (!old_seg[i].is_valid()) {
-        //         log_err("[%lu:%lu:%lu] Invalid slot detected in old_seg[%lu]", cli_id, coro_id, this->key_num, i);
-        //         old_seg[i].print(std::format("[{}:{}:{}]Invalid old_seg slot", cli_id, coro_id, this->key_num));
-        //         assert(false);
-        //     }
-        // }
-
         std::sort(data, data + len);
         uint8_t sign = data[0].sign;
         int off_1 = 0, off_2 = 0;
@@ -498,14 +481,8 @@ namespace MYHASH
                 if (data[off_1].fp <= old_seg[off_2].fp)
             #endif
                 {
-                    if (data[off_1].local_depth == local_depth) {
-                        // if (!data[off_1].is_valid()) {
-                        //     log_err("[%lu:%lu:%lu] Invalid slot detected in data[%lu]", cli_id, coro_id, this->key_num, off_1);
-                        //     data[off_1].print(std::format("[{}:{}:{}]Invalid data slot", cli_id, coro_id, this->key_num));
-                        //     assert(false);
-                        // }
+                    if (data[off_1].local_depth == local_depth)
                         new_seg[new_seg_len++] = data[off_1];
-                    }
                     off_1++;
                 }
             #if READ_FULL_KEY_ON_FP_COLLISION
@@ -516,11 +493,6 @@ namespace MYHASH
                 {
                     if (old_seg_len == 0)
                         old_seg[0].print(std::format("[{}:{}:{}]old_seg_len==0", cli_id, coro_id, this->key_num));
-                    // if (!old_seg[off_2].is_valid()) {
-                    //     log_err("[%lu:%lu:%lu] Invalid slot detected in old_seg[%lu]", cli_id, coro_id, this->key_num, off_2);
-                    //     old_seg[off_2].print(std::format("[{}:{}:{}]Invalid old_seg slot", cli_id, coro_id, this->key_num));
-                    //     assert(false);
-                    // }
                     new_seg[new_seg_len++] = old_seg[off_2];
                     off_2++;
                 }
@@ -530,23 +502,12 @@ namespace MYHASH
                     // fp相同但fp_2不同，按fp_2排序
                     if (data[off_1].fp_2 < old_seg[off_2].fp_2)
                     {
-                        if (data[off_1].local_depth == local_depth) {
-                            // if (!data[off_1].is_valid()) {
-                            //     log_err("[%lu:%lu:%lu] Invalid slot detected in data[%lu] during fp_2 comparison", cli_id, coro_id, this->key_num, off_1);
-                            //     data[off_1].print(std::format("[{}:{}:{}]Invalid data slot in fp_2 comparison", cli_id, coro_id, this->key_num));
-                            //     assert(false);
-                            // }
+                        if (data[off_1].local_depth == local_depth)
                             new_seg[new_seg_len++] = data[off_1];
-                        }
                         off_1++;
                     }
                     else
                     {
-                        // if (!old_seg[off_2].is_valid()) {
-                        //     log_err("[%lu:%lu:%lu] Invalid slot detected in old_seg[%lu] during fp_2 comparison", cli_id, coro_id, this->key_num, off_2);
-                        //     old_seg[off_2].print(std::format("[{}:{}:{}]Invalid old_seg slot in fp_2 comparison", cli_id, coro_id, this->key_num));
-                        //     assert(false);
-                        // }
                         new_seg[new_seg_len++] = old_seg[off_2];
                         off_2++;
                     }
@@ -562,20 +523,6 @@ namespace MYHASH
 
                     // 读取两个KV块
             #if CORO_DEBUG
-                    // if (!data[off_1].is_valid() || !old_seg[off_2].is_valid())
-                    // {
-                    //     std::cerr << std::format("[{}:{}]segloc:{}读取KVBlock地址异常", cli_id, coro_id, this->key_num) << std::endl;
-                    //     data[off_1].print(std::format("[{}:{}:{}]data[{}]", cli_id, coro_id, this->key_num, off_1));
-                    //     old_seg[off_2].print(std::format("[{}:{}:{}]old_seg[{}]", cli_id, coro_id, this->key_num, off_2));
-
-                    //     std::cerr << "CurSeg len:" << len << std::endl;
-                    //     for (uint64_t i = 0; i < len; i++)
-                    //         data[i].print(std::format("data[{}]", i));
-                    //     std::cerr << "MainSeg len:" << old_seg_len << std::endl;
-                    //     for (uint64_t i = 0; i < old_seg_len; i++)
-                    //         old_seg[i].print(std::format("old_seg[{}]", i));
-                    // }
-
                     co_await conn->read(ralloc.ptr(data[off_1].offset), seg_rmr.rkey, kv1, data[off_1].len * ALIGNED_SIZE, lmr->lkey, 
                                        std::source_location::current(), 
                                        std::format("[{}:{}]segloc:{}读取CurSegKVBlock地址\n{}", cli_id, coro_id, this->key_num, ralloc.ptr(data[off_1].offset)));
@@ -595,14 +542,8 @@ namespace MYHASH
                     {
                         // 相同key，只保留较新的数据(data[off_1])
                         // log_err("[%lu:%lu:%lu]确认为相同key，保留较新数据", cli_id, coro_id, this->key_num);
-                        if (data[off_1].local_depth == local_depth) {
-                            // if (!data[off_1].is_valid()) {
-                            //     log_err("[%lu:%lu:%lu] Invalid slot detected in data[%lu] during key collision", cli_id, coro_id, this->key_num, off_1);
-                            //     data[off_1].print(std::format("[{}:{}:{}]Invalid data slot in key collision", cli_id, coro_id, this->key_num));
-                            //     assert(false);
-                            // }
+                        if (data[off_1].local_depth == local_depth)
                             new_seg[new_seg_len++] = data[off_1];
-                        }
                     }
                     else
                     {
@@ -610,20 +551,8 @@ namespace MYHASH
                         // log_err("[%lu:%lu:%lu]确认为不同key(哈希冲突)，两个都保留 offset1:%lu offset2:%lu", 
                         //         cli_id, coro_id, this->key_num, 
                         //         data[off_1].offset, old_seg[off_2].offset);
-                        if (data[off_1].local_depth == local_depth) {
-                            // if (!data[off_1].is_valid()) {
-                            //     log_err("[%lu:%lu:%lu] Invalid slot detected in data[%lu] during hash collision", cli_id, coro_id, this->key_num, off_1);
-                            //     data[off_1].print(std::format("[{}:{}:{}]Invalid data slot in hash collision", cli_id, coro_id, this->key_num));
-                            //     assert(false);
-                            // }
+                        if (data[off_1].local_depth == local_depth)
                             new_seg[new_seg_len++] = data[off_1];
-                        }
-                        
-                        // if (!old_seg[off_2].is_valid()) {
-                        //     log_err("[%lu:%lu:%lu] Invalid slot detected in old_seg[%lu] during hash collision", cli_id, coro_id, this->key_num, off_2);
-                        //     old_seg[off_2].print(std::format("[{}:{}:{}]Invalid old_seg slot in hash collision", cli_id, coro_id, this->key_num));
-                        //     assert(false);
-                        // }
                         new_seg[new_seg_len++] = old_seg[off_2];
                     }
 
@@ -642,38 +571,15 @@ namespace MYHASH
             // memcpy(new_seg + old_seg_len + off_1, data + off_1, (len - off_1) * sizeof(Slot));
             for (uint64_t i = off_1; i < len; i++)
             {
-                if (data[i].local_depth == local_depth) {
-                    // Check if slot is valid before adding to new_seg
-                    // if (!data[i].is_valid()) {
-                    //     log_err("[%lu:%lu:%lu] Invalid slot detected in data[%lu]", cli_id, coro_id, this->key_num, i);
-                    //     data[i].print(std::format("[{}:{}:{}]Invalid data slot during remaining processing", cli_id, coro_id, this->key_num));
-                    //     assert(false);
-                    // }
+                if (data[i].local_depth == local_depth)
                     new_seg[new_seg_len++] = data[i];
-                }
                 // else data[i].print(std::format("[{}:{}:{}]发现过时条目，local_depth:{} != {}", cli_id, coro_id, this->key_num, data[i].local_depth, local_depth));
             }
         }
         else if (off_2 < old_seg_len)
         {
             for (uint64_t i = off_2; i < old_seg_len; i++)
-            {
-                // if (!old_seg[i].is_valid())
-                // {
-                //     log_err("[%lu:%lu:%lu] Invalid slot detected in old_seg[%lu]", cli_id, coro_id, this->key_num, i);
-                //     old_seg[i].print(std::format("[{}:{}:{}]Invalid old_seg slot during remaining processing", cli_id, coro_id, this->key_num));
-                //     assert(false);
-                // }
                 new_seg[new_seg_len++] = old_seg[i];
-            }
-        }
-        // Verify that all slots in new_seg are valid before returning
-        for (uint64_t i = 0; i < new_seg_len; i++) {
-            // if (!new_seg[i].is_valid()) {
-            //     log_err("[%lu:%lu:%lu] Invalid slot detected in new_seg[%lu]", cli_id, coro_id, this->key_num, i);
-            //     new_seg[i].print(std::format("[{}:{}:{}]Invalid new_seg slot", cli_id, coro_id, this->key_num));
-            //     assert(false);
-            // }
         }
 #if READ_FULL_KEY_ON_FP_COLLISION
         co_return new_seg_len;

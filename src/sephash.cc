@@ -548,45 +548,123 @@ Retry:
     sum_cost.push_retry_cnt(retry_cnt);
 }
 
-void Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg)
+#if READ_FULL_KEY_ON_FP_COLLISION
+task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg)
+#else
+uint64_t Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg)
+#endif
 {
     std::sort(data, data + len);
     uint8_t sign = data[0].sign;
     int off_1 = 0, off_2 = 0;
-    for (uint64_t i = 0; i < len + old_seg_len; i++)
+    uint64_t new_seg_len = 0;
+    if (len && old_seg_len)
     {
-        if (data[off_1].sign != sign)
+        for (uint64_t i = 0; i < len + old_seg_len; i++)
         {
-            log_err("[%lu:%lu:%lu]wrong sign",cli_id,coro_id,this->key_num);
-            print_mainseg(data, len);
-            exit(-1);
-        }
-        if (data[off_1].fp <= old_seg[off_2].fp)
-        {
-            if (data[off_1].fp == old_seg[off_2].fp && data[off_1].fp_2 == old_seg[off_2].fp_2)
+#if READ_FULL_KEY_ON_FP_COLLISION
+            if (data[off_1].fp < old_seg[off_2].fp)
+#else
+            if (data[off_1].fp <= old_seg[off_2].fp)
+#endif
             {
-                // log_err("[%lu:%lu:%lu]duplicate fp=%d fp2=%d", cli_id, coro_id, this->key_num, data[off_1].fp, data[off_1].fp_2);
-                // TODO: 读取完整key，对比
+                new_seg[new_seg_len++] = data[off_1];
+                off_1++;
             }
-            new_seg[i] = data[off_1];
-            off_1++;
+#if READ_FULL_KEY_ON_FP_COLLISION
+            else if (data[off_1].fp > old_seg[off_2].fp)
+#else
+            else
+#endif
+            {
+                if (old_seg_len == 0)
+                    old_seg[0].print(std::format("[{}:{}:{}]old_seg_len==0", cli_id, coro_id, this->key_num));
+                new_seg[new_seg_len++] = old_seg[off_2];
+                off_2++;
+            }
+#if READ_FULL_KEY_ON_FP_COLLISION
+            else if (data[off_1].fp == old_seg[off_2].fp && data[off_1].fp_2 != old_seg[off_2].fp_2)
+            {
+                // fp相同但fp_2不同，按fp_2排序
+                if (data[off_1].fp_2 < old_seg[off_2].fp_2)
+                {
+                    new_seg[new_seg_len++] = data[off_1];
+                    off_1++;
+                }
+                else
+                {
+                    new_seg[new_seg_len++] = old_seg[off_2];
+                    off_2++;
+                }
+            }
+            else // fp和fp_2都相同
+            {
+                // 读取完整key进行比较
+                // log_err("[%lu:%lu:%lu]发现fp=%d fp2=%d相同，读取完整key比较", cli_id, coro_id, this->key_num, data[off_1].fp, data[off_1].fp_2);
+
+                // 分配足够空间存储KV块
+                KVBlock *kv1 = (KVBlock *)alloc.alloc(data[off_1].len * ALIGNED_SIZE);
+                KVBlock *kv2 = (KVBlock *)alloc.alloc(old_seg[off_2].len * ALIGNED_SIZE);
+
+                // 读取两个KV块
+#if CORO_DEBUG
+                co_await conn->read(ralloc.ptr(data[off_1].offset), seg_rmr.rkey, kv1, data[off_1].len * ALIGNED_SIZE, lmr->lkey,
+                                    std::source_location::current(),
+                                    std::format("[{}:{}]segloc:{}读取CurSegKVBlock地址\n{}", cli_id, coro_id, this->key_num, ralloc.ptr(data[off_1].offset)));
+                co_await conn->read(ralloc.ptr(old_seg[off_2].offset), seg_rmr.rkey, kv2, old_seg[off_2].len * ALIGNED_SIZE, lmr->lkey,
+                                    std::source_location::current(),
+                                    std::format("[{}:{}]segloc:{}读取MainSegKVBlock地址\n{}", cli_id, coro_id, this->key_num, ralloc.ptr(old_seg[off_2].offset)));
+#else
+                co_await conn->read(ralloc.ptr(data[off_1].offset), seg_rmr.rkey, kv1, data[off_1].len * ALIGNED_SIZE, lmr->lkey);
+                co_await conn->read(ralloc.ptr(old_seg[off_2].offset), seg_rmr.rkey, kv2, old_seg[off_2].len * ALIGNED_SIZE, lmr->lkey);
+#endif
+
+                // 比较key是否相同
+                bool same_key = (kv1->k_len == kv2->k_len) &&
+                                (memcmp(kv1->data, kv2->data, kv1->k_len) == 0);
+
+                if (same_key)
+                {
+                    // 相同key，只保留较新的数据(data[off_1])
+                    // log_err("[%lu:%lu:%lu]确认为相同key，保留较新数据", cli_id, coro_id, this->key_num);
+                    new_seg[new_seg_len++] = data[off_1];
+                }
+                else
+                {
+                    // 不同key，哈希冲突，两个都保留
+                    // log_err("[%lu:%lu:%lu]确认为不同key(哈希冲突)，两个都保留 offset1:%lu offset2:%lu",
+                    //         cli_id, coro_id, this->key_num,
+                    //         data[off_1].offset, old_seg[off_2].offset);
+                    new_seg[new_seg_len++] = data[off_1];
+                    new_seg[new_seg_len++] = old_seg[off_2];
+                }
+
+                off_1++;
+                off_2++;
+            }
+#endif
+            if (off_1 >= len || off_2 >= old_seg_len)
+                break;
         }
-        else
-        {
-            new_seg[i] = old_seg[off_2];
-            off_2++;
-        }
-        if (off_1 >= len || off_2 >= old_seg_len)
-            break;
     }
+
+    // 处理剩余元素
     if (off_1 < len)
     {
-        memcpy(new_seg + old_seg_len + off_1, data + off_1, (len - off_1) * sizeof(Slot));
+        // memcpy(new_seg + old_seg_len + off_1, data + off_1, (len - off_1) * sizeof(Slot));
+        for (uint64_t i = off_1; i < len; i++)
+            new_seg[new_seg_len++] = data[i];
     }
     else if (off_2 < old_seg_len)
     {
-        memcpy(new_seg + len + off_2, old_seg + off_2, (old_seg_len - off_2) * sizeof(Slot));
+        for (uint64_t i = off_2; i < old_seg_len; i++)
+            new_seg[new_seg_len++] = old_seg[i];
     }
+#if READ_FULL_KEY_ON_FP_COLLISION
+    co_return new_seg_len;
+#else
+    return new_seg_len;
+#endif
 }
 
 void print_mainseg(Slot *main_seg, uint64_t main_seg_len)
@@ -650,9 +728,13 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
 
     // 3. Sort Segment
     MainSeg *new_main_seg = (MainSeg *)alloc.alloc(main_seg_size + sizeof(Slot) * SLOT_PER_SEG);
-    merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots);
+#if READ_FULL_KEY_ON_FP_COLLISION
+    uint64_t new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots);
+#else
+    uint64_t new_seg_len = merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots);
+#endif
     FpInfo fp_info[MAX_FP_INFO] = {};
-    cal_fpinfo(new_main_seg->slots, SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len, fp_info);
+    cal_fpinfo(new_main_seg->slots, new_seg_len, fp_info); // SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len
 
     log_merge("将segloc:%lu/%lu的%d个CurSeg条目合并到%d个MainSeg条目", seg_loc, (1ull << global_depth) - 1, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len);
     // 4. Split (为了减少协程嵌套层次的开销，这里就不抽象成单独的函数了)
@@ -674,7 +756,7 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
         uint64_t pattern;
         uint64_t off1 = 0, off2 = 0;
         KVBlock *kv_block = (KVBlock *)alloc.alloc(130 * ALIGNED_SIZE);
-        for (uint64_t i = 0; i < (SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len); i++)
+        for (uint64_t i = 0; i < new_seg_len; i++) // SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len
         {
             dep_bit = (new_main_seg->slots[i].dep >> dep_off) & 1;
             if (dep_off == 3)
@@ -815,16 +897,16 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
     // 5.1 Write New MainSeg to Remote && Update CurSegMeta
     // a. write main segment
 
-    uintptr_t new_main_ptr = ralloc.alloc(main_seg_size + sizeof(Slot) * SLOT_PER_SEG, true); // IMPORTANT: 在MN分配new main seg，注意 FIXME: ralloc没有free功能
-    uint64_t new_main_len = dir->segs[seg_loc].main_seg_len + SLOT_PER_SEG;
+    uintptr_t new_main_ptr = ralloc.alloc(new_seg_len * sizeof(Slot), true); // IMPORTANT: 在MN分配new main seg，注意 FIXME: ralloc没有free功能 // main_seg_size + sizeof(Slot) * SLOT_PER_SEG
+    // uint64_t new_main_len = dir->segs[seg_loc].main_seg_len + SLOT_PER_SEG;
     wo_wait_conn->pure_write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots,
-                                sizeof(Slot) * new_main_len, lmr->lkey);
+                             sizeof(Slot) * new_seg_len, lmr->lkey);
     // co_await wo_wait_conn->write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots,
-    //                             sizeof(Slot) * new_main_len, lmr->lkey);
+    //                             sizeof(Slot) * new_seg_len, lmr->lkey);
 
     // b. Update MainSegPtr/Len and fp_bitmap
     cur_seg->seg_meta.main_seg_ptr = new_main_ptr;
-    cur_seg->seg_meta.main_seg_len = main_seg_size / sizeof(Slot) + SLOT_PER_SEG;
+    cur_seg->seg_meta.main_seg_len = new_seg_len; // main_seg_size / sizeof(Slot) + SLOT_PER_SEG;
     this->offset[seg_loc].offset = 0;
     memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(uint64_t) * 16);
     co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
@@ -847,7 +929,7 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
             dir->segs[cur_seg_loc+offset].local_depth = cur_seg->seg_meta.local_depth;
             dir->segs[cur_seg_loc+offset].cur_seg_ptr = seg_ptr; // 这里会在没分裂时就更新超出depth的dir
             dir->segs[cur_seg_loc+offset].main_seg_ptr = new_main_ptr;
-            dir->segs[cur_seg_loc+offset].main_seg_len = new_main_len;
+            dir->segs[cur_seg_loc+offset].main_seg_len = new_seg_len;
             memcpy(dir->segs[cur_seg_loc+offset].fp, fp_info, sizeof(FpInfo) * MAX_FP_INFO);
             dentry_ptr = seg_rmr.raddr + sizeof(uint64_t) + (cur_seg_loc+offset) * sizeof(DirEntry) ;
             // Update
