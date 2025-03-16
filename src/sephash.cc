@@ -1161,52 +1161,54 @@ Retry:
 // 找到对应的slot，然后CAS更新slot的内容
 task<> Client::update(Slice *key, Slice *value)
 {
-    // log_err("before update key:%lu value:%s cli_id:%d", *(uint64_t *)key->data, value->data,cli_id);
-    uint64_t pattern = (uint64_t)hash(key->data, key->len);
-    KVBlock *kv_block = InitKVBlock(key, value, &alloc);
-    uint64_t kvblock_len = key->len + value->len + sizeof(uint64_t) * 2;
-    uint64_t kvblock_ptr = ralloc.alloc(kvblock_len);
-    wo_wait_conn->pure_write(kvblock_ptr, seg_rmr.rkey, kv_block, kvblock_len, lmr->lkey);
+    // 日志结构顺序写入的设计中，update操作等同于insert操作
+    co_await insert(key, value);
+//     // log_err("before update key:%lu value:%s cli_id:%d", *(uint64_t *)key->data, value->data,cli_id);
+//     uint64_t pattern = (uint64_t)hash(key->data, key->len);
+//     KVBlock *kv_block = InitKVBlock(key, value, &alloc);
+//     uint64_t kvblock_len = key->len + value->len + sizeof(uint64_t) * 2;
+//     uint64_t kvblock_ptr = ralloc.alloc(kvblock_len);
+//     wo_wait_conn->pure_write(kvblock_ptr, seg_rmr.rkey, kv_block, kvblock_len, lmr->lkey);
 
-    char data[1024];
-    Slice ret_value;
-    ret_value.data = data;
-    auto [slot_ptr, old_slot] = co_await search(key, &ret_value); // FIXME: may stuck when load_num < num_op
+//     char data[1024];
+//     Slice ret_value;
+//     ret_value.data = data;
+//     auto [slot_ptr, old_slot] = co_await search(key, &ret_value); // FIXME: may stuck when load_num < num_op
     
-    Slot *tmp = (Slot *)alloc.alloc(sizeof(Slot));
-    Slot old = (Slot) old_slot;
-    tmp->dep = old.dep;
-    tmp->fp = fp(pattern);
-    tmp->len = (kvblock_len + ALIGNED_SIZE - 1) / ALIGNED_SIZE;
-    tmp->sign = old.sign;
-    tmp->offset = ralloc.offset(kvblock_ptr);
-    tmp->fp_2 = fp2(pattern);
+//     Slot *tmp = (Slot *)alloc.alloc(sizeof(Slot));
+//     Slot old = (Slot) old_slot;
+//     tmp->dep = old.dep;
+//     tmp->fp = fp(pattern);
+//     tmp->len = (kvblock_len + ALIGNED_SIZE - 1) / ALIGNED_SIZE;
+//     tmp->sign = old.sign;
+//     tmp->offset = ralloc.offset(kvblock_ptr);
+//     tmp->fp_2 = fp2(pattern);
 
-    if (slot_ptr != 0ull)
-    {
-        // log_err("old kvblock_ptr:%lx offset:%lx",ralloc.ptr(old.offset),old.offset);
-        // log_err("new kvblock_ptr:%lx offset:%lx",kvblock_ptr,tmp->offset);
-        // log_err("[%lu:%lu]slot_ptr:%lx slot:%lx for %lu to be updated with new slot: fp:%d len:%d offset:%lx",cli_id,coro_id,slot_ptr,old_slot,*(uint64_t*)key->data,tmp->fp,tmp->len,tmp->offset);
-        // 3rd RTT: Setting the key-value block to full zero
-#if RETRY_CAS
-        int retry_count = 0;
-        while (retry_count < 1000000) {
-            if (co_await conn->cas_n(slot_ptr, seg_rmr.rkey, old_slot, *(uint64_t*)tmp)) {
-            break;
-            }
-            retry_count++;
-        }
-        if (retry_count >= 1000000) {
-            log_err("[%lu:%lu]Fail to update key : %lu after 1000000 retries", cli_id, coro_id, *(uint64_t*)key->data);
-        }
-#else
-        if (!co_await conn->cas_n(slot_ptr, seg_rmr.rkey, old_slot, *(uint64_t*)tmp)){
-            log_err("[%lu:%lu]Fail to update key : %lu",cli_id,coro_id,*(uint64_t*)key->data);
-        }
-#endif
-    }else{
-        log_err("[%lu:%lu]No match key for %lu to update",cli_id,coro_id,*(uint64_t*)key->data);
-    }
+//     if (slot_ptr != 0ull)
+//     {
+//         // log_err("old kvblock_ptr:%lx offset:%lx",ralloc.ptr(old.offset),old.offset);
+//         // log_err("new kvblock_ptr:%lx offset:%lx",kvblock_ptr,tmp->offset);
+//         // log_err("[%lu:%lu]slot_ptr:%lx slot:%lx for %lu to be updated with new slot: fp:%d len:%d offset:%lx",cli_id,coro_id,slot_ptr,old_slot,*(uint64_t*)key->data,tmp->fp,tmp->len,tmp->offset);
+//         // 3rd RTT: Setting the key-value block to full zero
+// #if RETRY_CAS
+//         int retry_count = 0;
+//         while (retry_count < 1000000) {
+//             if (co_await conn->cas_n(slot_ptr, seg_rmr.rkey, old_slot, *(uint64_t*)tmp)) {
+//             break;
+//             }
+//             retry_count++;
+//         }
+//         if (retry_count >= 1000000) {
+//             log_err("[%lu:%lu]Fail to update key : %lu after 1000000 retries", cli_id, coro_id, *(uint64_t*)key->data);
+//         }
+// #else
+//         if (!co_await conn->cas_n(slot_ptr, seg_rmr.rkey, old_slot, *(uint64_t*)tmp)){
+//             log_err("[%lu:%lu]Fail to update key : %lu",cli_id,coro_id,*(uint64_t*)key->data);
+//         }
+// #endif
+//     }else{
+//         log_err("[%lu:%lu]No match key for %lu to update",cli_id,coro_id,*(uint64_t*)key->data);
+//     }
     co_return;
 }
 

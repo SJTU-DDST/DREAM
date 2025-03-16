@@ -189,6 +189,13 @@ namespace MYHASH
         sum_cost.push_retry_cnt(retry_cnt);
     }
 
+    task<> Client::update(Slice *key, Slice *value) // FIXME: 目前无法在预先插入(load_num)后更新
+    {
+        // 日志结构顺序写入的设计中，update操作等同于insert操作
+        co_await insert(key, value);
+        co_return;
+    }
+
     task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_meta)
     {
         log_merge("[%lu:%lu:%lu]开始分裂/合并，seg_loc:%lu", cli_id, coro_id, this->key_num, seg_loc);

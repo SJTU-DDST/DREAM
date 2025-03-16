@@ -21,6 +21,7 @@ namespace MYHASH
             delete xrc_conn;
         }
         task<> insert(Slice *key, Slice *value);
+        task<> update(Slice *key, Slice *value);
 
     protected:
         rdma_conn *xrc_conn;
