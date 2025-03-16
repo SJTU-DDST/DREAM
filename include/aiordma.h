@@ -67,7 +67,7 @@ struct Slot
     }
     bool operator<(const Slot &a) const
     {
-        return fp < a.fp;
+        return (fp < a.fp) || (fp == a.fp && fp_2 < a.fp_2);
     }
     void print(uint64_t slot_id = -1)
     {
