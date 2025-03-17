@@ -22,6 +22,7 @@ namespace MYHASH
         }
         task<> insert(Slice *key, Slice *value);
         task<> update(Slice *key, Slice *value);
+        task<> remove(Slice *key);
 
     protected:
         rdma_conn *xrc_conn;

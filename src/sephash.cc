@@ -560,6 +560,7 @@ task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uin
         bool from_data;    // true:来自data, false:来自old_seg
         uint64_t index;    // 在原始数组中的索引
         bool need_read;    // 是否需要读取完整key
+        bool is_delete;    // 是否是删除条目(v_len=0)
         Slot *slot_ptr;    // 指向原始Slot的指针
 
         // 排序规则
@@ -612,6 +613,7 @@ task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uin
             .from_data = true,
             .index = i,
             .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
+            .is_delete = false,                 // 初始时不知道是否是删除条目
             .slot_ptr = &data[i]};
         sort_items.push_back(item);
     }
@@ -627,6 +629,7 @@ task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uin
             .from_data = false,
             .index = i,
             .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
+            .is_delete = false,                 // 初始时不知道是否是删除条目
             .slot_ptr = &old_seg[i]};
         sort_items.push_back(item);
     }
@@ -650,6 +653,7 @@ task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uin
             }
 
             KVBlock *kv = kv_cache[offset];
+            item.is_delete = kv->v_len == 0;
 
             // 计算key的哈希值
             if (kv->k_len <= sizeof(uint64_t))
@@ -721,7 +725,7 @@ task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uin
     // 4. 根据定义的规则排序
     std::sort(sort_items.begin(), sort_items.end());
 
-    // 5. 处理排序后的结果，相同key只保留最新的
+    // 5. 处理排序后的结果，相同key只保留最新的，且处理删除标记
     uint64_t new_seg_len = 0;
     uint64_t last_fp = 0xFF; // 不可能的值
     uint64_t last_fp2 = 0xFF;
@@ -750,7 +754,9 @@ task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uin
         }
 
         // 将Slot添加到结果数组
-        new_seg[new_seg_len++] = *item.slot_ptr;
+        if (!item.is_delete)
+            new_seg[new_seg_len++] = *item.slot_ptr;
+        // else log_err("[%lu:%lu:%lu]删除了一个条目", cli_id, coro_id, this->key_num);
     }
     // log_err("[%lu:%lu:%lu]合并后的seg长度从%lu减少到%lu", cli_id, coro_id, this->key_num, len + old_seg_len, new_seg_len);
     co_return new_seg_len;
@@ -1371,7 +1377,7 @@ Retry:
 task<> Client::update(Slice *key, Slice *value)
 {
     // 日志结构顺序写入的设计中，update操作等同于insert操作
-    co_await insert(key, value);
+    co_await this->insert(key, value);
 //     // log_err("before update key:%lu value:%s cli_id:%d", *(uint64_t *)key->data, value->data,cli_id);
 //     uint64_t pattern = (uint64_t)hash(key->data, key->len);
 //     KVBlock *kv_block = InitKVBlock(key, value, &alloc);
@@ -1423,6 +1429,10 @@ task<> Client::update(Slice *key, Slice *value)
 
 task<> Client::remove(Slice *key)
 {
+    Slice delete_value;
+    delete_value.len = 0;
+    delete_value.data = nullptr;
+    co_await this->insert(key, &delete_value);
     co_return;
 }
 

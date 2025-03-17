@@ -25,10 +25,10 @@ def reset_hash_type():
 experiment_type = sys.argv[1] if len(sys.argv) > 1 else "insert"
 
 # 定义 num_cli 列表
-# num_cli_list = [1, 2, 4, 8, 16, 24, 32, 40, 48]
-# hash_types = ["MYHASH", "SEPHASH", "Plush", "RACE"]
-num_cli_list = [16]
-hash_types = ["MYHASH"]
+num_cli_list = [1, 2, 4, 8, 16, 24, 32, 40, 48]
+hash_types = ["MYHASH", "SEPHASH", "Plush", "RACE"]
+# num_cli_list = [16]
+# hash_types = ["MYHASH"]
 
 # 设置脚本路径
 experiment_script = f"../scripts/ser_cli_{experiment_type}.sh"

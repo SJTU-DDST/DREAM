@@ -481,6 +481,7 @@ namespace MYHASH
             bool from_data;    // true:来自data, false:来自old_seg
             uint64_t index;    // 在原始数组中的索引
             bool need_read;    // 是否需要读取完整key
+            bool is_delete;    // 是否是删除条目(v_len=0)
             Slot *slot_ptr;    // 指向原始Slot的指针
 
             // 排序规则
@@ -540,6 +541,7 @@ namespace MYHASH
                     .from_data = true,
                     .index = i,
                     .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
+                    .is_delete = false,                 // 初始时不知道是否是删除条目
                     .slot_ptr = &data[i]};
                 sort_items.push_back(item);
             }
@@ -556,6 +558,7 @@ namespace MYHASH
                 .from_data = false,
                 .index = i,
                 .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
+                .is_delete = false,                 // 初始时不知道是否是删除条目
                 .slot_ptr = &old_seg[i]};
             sort_items.push_back(item);
         }
@@ -579,6 +582,7 @@ namespace MYHASH
                 }
 
                 KVBlock *kv = kv_cache[offset];
+                item.is_delete = kv->v_len == 0;
 
                 // 计算key的哈希值
                 if (kv->k_len <= sizeof(uint64_t))
@@ -594,63 +598,10 @@ namespace MYHASH
             }
         }
 
-        // std::unordered_map<uint64_t, KVBlock *> kv_cache; // 避免重复读取相同offset的KV
-        // std::vector<rdma_future> read_tasks;                   // 存储未完成的读取任务
-
-        // // 发起所有读取请求
-        // for (auto &item : sort_items)
-        // {
-        //     if (item.need_read)
-        //     {
-        //         Slot *slot = item.slot_ptr;
-        //         uint64_t offset = ralloc.ptr(slot->offset);
-
-        //         if (kv_cache.find(offset) == kv_cache.end())
-        //         {
-        //             // 未读取过，执行RDMA读取但不等待
-        //             KVBlock *kv = (KVBlock *)alloc.alloc(slot->len * ALIGNED_SIZE);
-        //             kv_cache[offset] = kv;
-
-        //             // 直接将任务放入vector中，不进行复制
-        //             read_tasks.push_back(wo_wait_conn->read(offset, seg_rmr.rkey, kv, slot->len * ALIGNED_SIZE, lmr->lkey)); // FIXME: ENOMEM
-        //         }
-        //     }
-        // }
-
-        // // 等待所有读取完成
-        // for (auto &task : read_tasks)
-        // {
-        //     // 使用std::move转移所有权，不进行复制
-        //     co_await std::move(task);
-        // }
-
-        // // 现在所有KV块都已读取完成，可以计算hash
-        // for (auto &item : sort_items)
-        // {
-        //     if (item.need_read)
-        //     {
-        //         Slot *slot = item.slot_ptr;
-        //         uint64_t offset = ralloc.ptr(slot->offset);
-        //         KVBlock *kv = kv_cache[offset];
-
-        //         // 计算key的哈希值
-        //         if (kv->k_len <= sizeof(uint64_t))
-        //         {
-        //             // 小key直接使用值
-        //             memcpy(&item.key_hash, kv->data, kv->k_len);
-        //         }
-        //         else
-        //         {
-        //             // 大key计算哈希
-        //             item.key_hash = hash(kv->data, kv->k_len);
-        //         }
-        //     }
-        // }
-
         // 4. 根据定义的规则排序
         std::sort(sort_items.begin(), sort_items.end());
 
-        // 5. 处理排序后的结果，相同key只保留最新的
+        // 5. 处理排序后的结果，相同key只保留最新的，且处理删除标记
         uint64_t new_seg_len = 0;
         uint64_t last_fp = 0xFF; // 不可能的值
         uint64_t last_fp2 = 0xFF;
@@ -679,7 +630,9 @@ namespace MYHASH
             }
 
             // 将Slot添加到结果数组
-            new_seg[new_seg_len++] = *item.slot_ptr;
+            if (!item.is_delete)
+                new_seg[new_seg_len++] = *item.slot_ptr;
+            // else log_err("[%lu:%lu:%lu]删除了一个条目", cli_id, coro_id, this->key_num);
         }
         // log_err("[%lu:%lu:%lu]合并后的seg长度从%lu减少到%lu", cli_id, coro_id, this->key_num, len + old_seg_len, new_seg_len);
         co_return new_seg_len;
@@ -812,4 +765,13 @@ namespace MYHASH
 #endif
     }
 #endif
+
+    task<> Client::remove(Slice *key)
+    {
+        Slice delete_value;
+        delete_value.len = 0;
+        delete_value.data = nullptr;
+        co_await this->insert(key, &delete_value);
+        co_return;
+    }
 }
