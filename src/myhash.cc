@@ -85,17 +85,21 @@ namespace MYHASH
             seg_meta[segloc] = CurSegMeta();
             memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
         }
+        uint32_t *srq_num_ptr = nullptr;
         while (!seg_meta[segloc].srq_num)
         {
-            CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+            if (!srq_num_ptr) srq_num_ptr = (uint32_t *)alloc.alloc(sizeof(uint32_t));
+            uint64_t srq_num_offset = segptr + 4 * sizeof(uint64_t) + FP_BITMAP_LENGTH * sizeof(FpBitmapType);
 #if CORO_DEBUG
-            co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, tmp_seg_meta, sizeof(CurSegMeta), lmr->lkey, std::source_location::current(), std::format("[{}:{}]segloc:{}读取meta地址{}", cli_id, coro_id, segloc, segptr + sizeof(uint64_t)));
+            co_await conn->read(srq_num_offset, seg_rmr.rkey, srq_num_ptr, sizeof(uint32_t), lmr->lkey,
+                                std::source_location::current(),
+                                std::format("[{}:{}]segloc:{}读取srq_num地址{}", cli_id, coro_id, segloc, srq_num_offset));
 #else
-            co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, tmp_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+            co_await conn->read(srq_num_offset, seg_rmr.rkey, srq_num_ptr, sizeof(uint32_t), lmr->lkey);
 #endif
-            memcpy(&seg_meta[segloc], tmp_seg_meta, sizeof(CurSegMeta));
-            log_test("读取到segloc:%lu的meta地址%llx srq_num:%u global_depth:%lu local_depth:%lu", segloc, segptr + sizeof(uint64_t), seg_meta[segloc].srq_num, dir->global_depth, seg_meta[segloc].local_depth);
-            // seg_meta[segloc].print(std::format("seg_meta[{}]在读取srq_num后:", segloc));
+            seg_meta[segloc].srq_num = *srq_num_ptr;
+            log_test("读取到segloc:%lu的srq_num:%u global_depth:%lu local_depth:%lu", 
+                segloc, seg_meta[segloc].srq_num, dir->global_depth, dir->segs[segloc].local_depth);
         }
         log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", xrc_conn->qp->qp_num, segloc, seg_meta[segloc].srq_num);
         assert_require(seg_meta[segloc].srq_num > 0);
