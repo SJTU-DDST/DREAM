@@ -120,7 +120,7 @@ struct Slot
 
 #if LARGER_FP_FILTER_GRANULARITY
 constexpr size_t FP_BITMAP_LENGTH = 1024;
-using FpBitmapType = uint64_t;
+using FpBitmapType = uint8_t;
 #else
 constexpr size_t FP_BITMAP_LENGTH = 16;
 using FpBitmapType = uint64_t;

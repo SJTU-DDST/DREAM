@@ -127,10 +127,11 @@ namespace MYHASH
         auto bit_loc = get_fp_bit(tmp->fp, tmp->fp_2);
         uintptr_t fp_ptr = segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType);
         // 远端的seg_meta->fp_bitmap[bit_loc]写入00000001。这里不用seg_meta，先alloc.alloc申请一个8byte buffer，写入00000001，然后写入远端。
-        CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+        FpBitmapType *tmp_fp_bitmap = (FpBitmapType *)alloc.alloc(sizeof(FpBitmapType));
         seg_meta[segloc].fp_bitmap[bit_loc] = 1;
+        *tmp_fp_bitmap = 1;
         memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
-        auto write_fp_bitmap = conn->write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
+        auto write_fp_bitmap = conn->write(fp_ptr, seg_rmr.rkey, tmp_fp_bitmap, sizeof(FpBitmapType), lmr->lkey);
 #endif
 
         co_await std::move(faa_slot_cnt);
@@ -154,7 +155,7 @@ namespace MYHASH
         if (remote_split)
         { // 应该大于本地的local_depth就需要更新
             // tmp->print(std::format("[{}:{}:{}]远端分裂了！remote_local_depth:{}>local_depth:{}，本次写入作废！需要重写！segloc:{}，FAA地址:{}", cli_id, coro_id, this->key_num, remote_local_depth, dir->segs[segloc].local_depth, segloc, segptr + sizeof(uint64_t)));
-            co_await check_gd(segloc); // TODO: 稍后重写，如果是最后一个，至少要合并完
+            co_await check_gd(segloc);
             // 更新本地的seg_meta
             auto new_segloc = get_seg_loc(pattern, dir->global_depth);
             co_await check_gd(new_segloc); // 现在&dir->segs[segloc]是最新的
@@ -171,7 +172,10 @@ namespace MYHASH
 #endif
 
                 CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
-                co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+                co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, 3 * sizeof(uint64_t), lmr->lkey); // don't read bitmap
+                seg_meta[segloc].local_depth = my_seg_meta->local_depth; // 顺便同步元数据，但因为seg_meta不是用alloc.alloc分配的，不能直接读过去
+                seg_meta[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
+                seg_meta[segloc].main_seg_len = my_seg_meta->main_seg_len;
 
                 co_await Split(segloc, segptr, my_seg_meta);
             }

@@ -522,7 +522,7 @@ Retry:
             memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
         }
         seg_meta[segloc].fp_bitmap[bit_loc] = 1;
-        memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
+        // memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
         co_await conn->write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
 #else
     auto [bit_loc, bit_info] = get_fp_bit(tmp->fp, tmp->fp_2);
@@ -1221,19 +1221,19 @@ Retry:
     }
     end_pos = start_pos + dir->segs[segloc].fp[pattern_fp1].num;
     uint64_t main_size = (end_pos - start_pos) * sizeof(Slot);
-    // log_err("len:%d",dir->segs[segloc].fp[pattern_fp1].num);
+    // log_err("读取segloc:%lu的范围为[%lu,%lu)的%d个Slot",segloc,start_pos,end_pos,dir->segs[segloc].fp[pattern_fp1].num);
 
-    // 3. Read SegMeta && MainSlots
-    CurSegMeta *seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
-    // auto read_meta = conn->read(cur_seg_ptr + sizeof(uint64_t), seg_rmr.rkey, seg_meta, sizeof(CurSegMeta), lmr->lkey);
-    auto read_meta = conn->read(cur_seg_ptr + sizeof(uint64_t), seg_rmr.rkey, seg_meta, 4 * sizeof(uint64_t), lmr->lkey);
-    // auto read_bit_map = wo_wait_conn->read(cur_seg_ptr + 5 * sizeof(uint64_t) + bit_loc * sizeof(uint64_t), seg_rmr.rkey, &seg_meta->fp_bitmap[bit_loc], sizeof(uint64_t), lmr->lkey);
+    // 3. Read SegMeta && MainSlots 读取CurSegMeta(不含bitmap)和FPTable过滤后的MainSeg
+    CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // TODO: 同时更新到本地的seg_meta缓存里
+    // auto read_meta = conn->read(cur_seg_ptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, sizeof(CurSegMeta), lmr->lkey);
+    auto read_meta = conn->read(cur_seg_ptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, 3 * sizeof(uint64_t), lmr->lkey);
+    auto read_bit_map = conn->read(cur_seg_ptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType), seg_rmr.rkey, &my_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey); // IMPORTANT: 读取CurSeg FPBitmap的对应bit
     Slot *main_seg = (Slot *)alloc.alloc(main_size);
     auto read_main_seg = wo_wait_conn->read(main_seg_ptr + start_pos * sizeof(Slot), seg_rmr.rkey, main_seg, main_size, lmr->lkey);
     
     // 4. Check Depth && MainSegPtr
     co_await std::move(read_meta);
-    if (seg_meta->main_seg_ptr != this->offset[segloc].main_seg_ptr){
+    if (my_seg_meta->main_seg_ptr != this->offset[segloc].main_seg_ptr) { // 读取到的main_seg_ptr和本地的不一致，意味着读到的过滤MainSeg是错误的，需要重新读取
         // 检查一遍Global Depth是否一致
         // TODO:增加segloc参数，读取对应位置的cur_seg_ptr；否则split的信息无法被及时同步
         uintptr_t new_cur_ptr = co_await check_gd(segloc);
@@ -1242,31 +1242,31 @@ Retry:
             // log_err("[%lu:%lu:%lu]stale cur_seg_ptr for segloc:%lx with old:%lx new:%lx",cli_id,coro_id,this->key_num,segloc,cur_seg_ptr,new_cur_ptr);
             this->offset[segloc].offset = 0;
             this->offset[segloc].main_seg_ptr = dir->segs[segloc].main_seg_ptr;
-            // co_await std::move(read_bit_map);
+            co_await std::move(read_bit_map);
             co_await std::move(read_main_seg);
             goto Retry;
         } 
         // 更新所有指向此Segment的DirEntry
-        // log_err("[%lu:%lu:%lu]stale main_seg_ptr for segloc:%lx with old:%lx new:%lx",cli_id,coro_id,this->key_num,segloc,seg_meta->main_seg_ptr,this->offset[segloc].main_seg_ptr);
-        uint64_t new_local_depth = seg_meta->local_depth;
+        // log_err("[%lu:%lu:%lu]stale main_seg_ptr for segloc:%lx with old:%lx new:%lx",cli_id,coro_id,this->key_num,segloc,my_seg_meta->main_seg_ptr,this->offset[segloc].main_seg_ptr);
+        uint64_t new_local_depth = my_seg_meta->local_depth;
         uint64_t stride = (1llu) << (dir->global_depth - new_local_depth);
         uint64_t cur_seg_loc;
         uint64_t first_seg_loc = segloc & ((1ull << new_local_depth) - 1);
         for (uint64_t i = 0; i < stride; i++)
         {
             cur_seg_loc = (i << new_local_depth) | first_seg_loc;
-            dir->segs[cur_seg_loc].main_seg_ptr = seg_meta->main_seg_ptr;
-            dir->segs[cur_seg_loc].main_seg_len = seg_meta->main_seg_len;
+            dir->segs[cur_seg_loc].main_seg_ptr = my_seg_meta->main_seg_ptr;
+            dir->segs[cur_seg_loc].main_seg_len = my_seg_meta->main_seg_len;
             this->offset[cur_seg_loc].offset = 0;
-            this->offset[cur_seg_loc].main_seg_ptr = seg_meta->main_seg_ptr;
-            dir->segs[segloc].local_depth = seg_meta->local_depth;
+            this->offset[cur_seg_loc].main_seg_ptr = my_seg_meta->main_seg_ptr;
+            dir->segs[segloc].local_depth = my_seg_meta->local_depth;
         }
-        // co_await std::move(read_bit_map);
+        co_await std::move(read_bit_map);
         co_await std::move(read_main_seg);
         // 怎么同步信息；同步哪些信息
         goto Retry;
     }
-    // log_err("read at seg_loc:%lu with main_ptr:%lx",segloc,seg_meta->main_seg_ptr);
+    // log_err("read at seg_loc:%lu with main_ptr:%lx",segloc,my_seg_meta->main_seg_ptr);
 
     // 5. Find Slot && Read KV
     uint64_t version = UINT64_MAX;
@@ -1279,53 +1279,63 @@ Retry:
     // 5.1 Find In Main
     // 在Main中，相同FP的Slot，更新的Slot会被写入在更靠前的位置
     co_await std::move(read_main_seg);
-    for(uint64_t cnt = 0 ; cnt < 2 ; cnt++){
-        for (uint64_t i = 0; i < end_pos - start_pos; i++)
-        {
-            // main_seg[i].print();
-            // 第二遍查找时，不带fp2再查一遍，有可能fp2没写入成功就被merge/split了
-            if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info)
-            {
-                if(main_seg[i].fp_2 == pattern_fp2 || cnt == 1){
-                    uintptr_t kv_ptr = ralloc.ptr(main_seg[i].offset);
-                    if(kv_ptr == 0 ) continue;
-#ifdef TOO_LARGE_KV
-                    co_await wo_wait_conn->read(kv_ptr, seg_rmr.rkey, kv_block,this->kv_block_len, lmr->lkey);
-#else
-                    co_await wo_wait_conn->read(kv_ptr, seg_rmr.rkey, kv_block,(main_seg[i].len) * ALIGNED_SIZE, lmr->lkey);
+    // 合并两次循环，同时查找fp匹配+fp2匹配的条目和fp匹配但fp2不匹配的条目
+    for (uint64_t i = 0; i < end_pos - start_pos; i++)
+    {
+#if HASH_TYPE == MYHASH // MYHASH: 只有fp_2匹配的才读取并检查完整key
+        if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info && main_seg[i].fp_2 == pattern_fp2)
+#else // SepHash: 不论fp_2是否匹配，都读取并检查完整key
+        if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info)
 #endif
-                    // main_seg[i].print();
-                    // kv_block->print_var_kv();
-                    // log_err("cmp_res:%d",memcmp(key->data, kv_block->data, key->len));
-                    if (memcmp(key->data, kv_block->data, key->len) == 0)
-                    {
-                        slot_ptr = main_seg_ptr + (start_pos + i) * sizeof(Slot);
-                        slot_content = main_seg[i];
-                        res_slot = i;
-                        res = kv_block;
-                        break;
-                    }
-                }
+        {
+            uintptr_t kv_ptr = ralloc.ptr(main_seg[i].offset);
+            if (kv_ptr == 0)
+                continue;
+
+#ifdef TOO_LARGE_KV
+            co_await wo_wait_conn->read(kv_ptr, seg_rmr.rkey, kv_block, this->kv_block_len, lmr->lkey);
+#else
+            co_await wo_wait_conn->read(kv_ptr, seg_rmr.rkey, kv_block, (main_seg[i].len) * ALIGNED_SIZE, lmr->lkey);
+#endif
+
+            // 检查是否是我们要找的key
+            if (memcmp(key->data, kv_block->data, key->len) == 0)
+            {
+                // 找到了匹配的key，更新最佳匹配
+                // 在MainSeg中，更靠前的位置表示更新的版本，所以第一个匹配的是最新的
+                slot_ptr = main_seg_ptr + (start_pos + i) * sizeof(Slot);
+                slot_content = main_seg[i];
+                res_slot = i;
+                res = kv_block;
+                break; // 因为MainSeg中靠前的是更新的，所以找到第一个匹配项就可以退出循环
             }
         }
-        if(res!=nullptr) break;
     }
 
     // 5.2 Find In CurSeg
-    // 在CurSeg中，相同FP的Slot，更新的Slot会被写入在更靠后的位置 TODO: 不仅可以相同FP，还可以相同key，因此需要读取完整key
-    // co_await std::move(read_bit_map);
-    // if ((seg_meta->fp_bitmap[bit_loc] & bit_info) == bit_info)
-    if (res==nullptr)
+    // 在CurSeg中，相同FP的Slot，更新的Slot会被写入在更靠后的位置
+    co_await std::move(read_bit_map);
+#if LARGER_FP_FILTER_GRANULARITY
+    if (my_seg_meta->fp_bitmap[bit_loc]) // 实际上应该fp_bitmap中认为有的，都要去CurSeg中找
+#else
+    if ((my_seg_meta->fp_bitmap[bit_loc] & bit_info) == bit_info)
+#endif
+    // if (res==nullptr) // 只有在Main中找不到时才去CurSeg中找
     {
         Slot* curseg_slots = (Slot *)alloc.alloc(sizeof(Slot) * SLOT_PER_SEG);
         co_await conn->read(cur_seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, curseg_slots, sizeof(Slot) * SLOT_PER_SEG, lmr->lkey);
         for (uint64_t i = SLOT_PER_SEG-1; i != -1; i--)
         {
             // curseg_slots[i].print();
+            // IMPORTANT: 对于MYHASH(curseg_slots[i].local_depth != 0)，还要匹配local_depth，不匹配的是乐观写入时写错segment的条目
+#if HASH_TYPE == MYHASH
+            if (curseg_slots[i] != 0 && curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].dep == dep_info && curseg_slots[i].fp_2 == pattern_fp2 && curseg_slots[i].local_depth == my_seg_meta->local_depth)
+#else
             if (curseg_slots[i] != 0 && curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].dep == dep_info && curseg_slots[i].fp_2 == pattern_fp2)
+#endif
             {
                 uintptr_t kv_ptr = ralloc.ptr(curseg_slots[i].offset);
-                if(kv_ptr == 0 ) continue;
+                if (kv_ptr == 0) continue;
 #ifdef TOO_LARGE_KV
                 co_await conn->read(kv_ptr, seg_rmr.rkey, kv_block, this->kv_block_len, lmr->lkey);
 #else
