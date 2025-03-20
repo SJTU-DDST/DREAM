@@ -10,6 +10,7 @@
 # Server auto run clients:
 #      server: ../ser_cli.sh server num_cli num_coro num_machine
 export LD_LIBRARY_PATH="/usr/local/lib64/:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="/usr/local/gcc-14.2.0/lib64:$LD_LIBRARY_PATH"
 num_op=10000000
 if [ "$1" = "server" ]
 then

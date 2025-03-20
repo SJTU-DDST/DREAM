@@ -49,7 +49,7 @@ if "insert" in experiment_type and not check_only_mode:
 # 定义 num_cli 列表
 num_cli_list = [1, 2, 4, 8, 16, 24, 32, 40, 48]
 hash_types = ["MYHASH", "SEPHASH", "Plush", "RACE"]
-# num_cli_list = [56]
+# num_cli_list = [64]
 # hash_types = ["MYHASH"]
 
 # 设置脚本路径
@@ -95,7 +95,12 @@ if rerun_mode or check_only_mode:
                 shutil.copy2(experiment_script, "../ser_cli.sh")
                 
                 # 运行实验
-                command = f"../ser_cli.sh server {num_cli} 1 1"
+                # Calculate number of machines needed (max 56 clients per machine)
+                num_machines = (num_cli + 55) // 56  # Ceiling division
+                clients_per_machine = (num_cli + num_machines - 1) // num_machines  # Distribute evenly
+                
+                # Build command with appropriate distribution
+                command = f"../ser_cli.sh server {clients_per_machine} 1 {num_machines}"
                 print(f"Experiment: {experiment_type}, Hash: {hash_type}, Threads: {num_cli}, Command: {command}")
                 result = subprocess.run(command, shell=True)
                 
@@ -144,7 +149,12 @@ for hash_type in hash_types:
 
     for num_cli in num_cli_list:
         # 构建命令
-        command = f"../ser_cli.sh server {num_cli} 1 1"
+        # Calculate number of machines needed (max 56 clients per machine)
+        num_machines = (num_cli + 55) // 56  # Ceiling division
+        clients_per_machine = (num_cli + num_machines - 1) // num_machines  # Distribute evenly
+        
+        # Build command with appropriate distribution
+        command = f"../ser_cli.sh server {clients_per_machine} 1 {num_machines}"
         
         # 执行命令
         print(f"Experiment: {experiment_type}, Hash: {hash_type}, Threads: {num_cli}, Command: {command}")
