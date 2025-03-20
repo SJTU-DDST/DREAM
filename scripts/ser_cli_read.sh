@@ -13,7 +13,7 @@ export LD_LIBRARY_PATH="/usr/local/lib64/:$LD_LIBRARY_PATH"
 num_op=10000000
 if [ "$1" = "server" ]
 then
-    echo "server"
+    # echo "server"
     cd /home/congyong/SepHash/build && bash ../sync.sh out 5 && \
     # ./ser_cli_var_kv --server \
     ./ser_cli --server --auto_run_client \

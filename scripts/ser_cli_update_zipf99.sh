@@ -40,9 +40,9 @@ else
                 --load_num $load_num \
                 --num_op $num_op \
                 --pattern_type 2 \
-                --insert_frac 1.0 \
+                --insert_frac 0.0 \
                 --read_frac   0.0 \
-                --update_frac  0.0 \
+                --update_frac  1.0 \
                 --delete_frac  0.0 \
                 --read_size     64
             done 

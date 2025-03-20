@@ -21,11 +21,11 @@ coro_num = args.coro_num
 # Define the connection information for each server
 servers = [
     # {'host': '192.168.98.70', 'user': 'congyong', 'password': '1111'}, # server
-    # {'host': '192.168.98.71', 'user': 'congyong', 'password': '1111'}, # server
     {'host': '192.168.98.74', 'user': 'congyong', 'password': '1111'},
-    # {'host': '192.168.98.75', 'user': 'congyong', 'password': '1111'},
-    # {'host': '192.168.98.72', 'user': 'congyong', 'password': '1111'},
-    # {'host': '192.168.98.73', 'user': 'congyong', 'password': '1111'},
+    {'host': '192.168.98.75', 'user': 'congyong', 'password': '1111'},
+    {'host': '192.168.98.73', 'user': 'congyong', 'password': '1111'},
+    {'host': '192.168.98.72', 'user': 'congyong', 'password': '1111'},
+    {'host': '192.168.98.71', 'user': 'congyong', 'password': '1111'},
     # {'host': '192.168.1.52', 'user': 'xxx', 'password': 'xxx'},
     # {'host': '192.168.1.53', 'user': 'xxx', 'password': 'xxx'},
     # {'host': '192.168.1.11', 'user': 'xxx', 'password': 'xxx'},
@@ -53,10 +53,10 @@ def client_command(i):
     print(f"client: {conn.host}")
     # conn.run('killall ser_cli_var_kv', warn=True)
     # conn.run('free -h', warn=True)
-    print(f'RUN rm -f insert*.txt search*.txt out.txt core || true on {conn.host}')
+    # print(f'RUN rm -f insert*.txt search*.txt out.txt core || true on {conn.host}')
     result = conn.run(f'rm -f insert*.txt search*.txt out.txt core || true')
-    print(f'RUN timeout 2m ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host}')
-    result = conn.run(f'timeout 2m ./run.sh {i} {cli_num} {coro_num} {num_servers}')
+    print(f'RUN timeout 30m ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host}')
+    result = conn.run(f'timeout 30m ./run.sh {i} {cli_num} {coro_num} {num_servers}')
     
     if result.return_code == 124:
         print(f'Command ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host} timed out.')

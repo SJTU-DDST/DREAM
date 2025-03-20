@@ -271,8 +271,12 @@ namespace MYHASH
                     co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,
                                             this->kv_block_len, lmr->lkey);
 #else
+#if CORO_DEBUG
                     co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,
                                             new_main_seg->slots[i].len * ALIGNED_SIZE, lmr->lkey, std::source_location::current(), std::format("[{}:{}]segloc:{}读取KVBlock地址{}", cli_id, coro_id, seg_loc, ralloc.ptr(new_main_seg->slots[i].offset))); // IMPORTANT: 读取完整KV，合并可以参考。
+#else
+                    co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block, new_main_seg->slots[i].len * ALIGNED_SIZE, lmr->lkey);
+#endif
 #endif
                     pattern = (uint64_t)hash(kv_block->data, kv_block->k_len);
                     new_main_seg->slots[i].dep = pattern >> (local_depth + 1);
