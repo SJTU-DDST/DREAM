@@ -103,7 +103,7 @@ if rerun_mode or check_only_mode:
                 command = f"../ser_cli.sh server {clients_per_machine} 1 {num_machines}"
                 print(f"Experiment: {experiment_type}, Hash: {hash_type}, Threads: {num_cli}, Command: {command}")
                 result = subprocess.run(command, shell=True)
-                
+                # ../ser_cli.sh server 36 1 2 可以但是test.py不行
                 # 处理结果
                 if result.returncode == 0:
                     for filename in os.listdir("."):
@@ -163,7 +163,7 @@ for hash_type in hash_types:
         # 检查命令是否成功执行
         if result.returncode != 0:
             print(f"Command failed with return code {result.returncode}")
-            continue
+            # continue
         
         # 定义 num_cli 目录
         num_cli_dir = os.path.join(base_dir, str(num_cli))

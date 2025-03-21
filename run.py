@@ -3,6 +3,7 @@
 import threading
 from fabric import Connection
 import argparse
+import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument("num_servers", type=int, help="Number of servers to run the command on", default=1)
@@ -55,8 +56,13 @@ def client_command(i):
     # conn.run('free -h', warn=True)
     # print(f'RUN rm -f insert*.txt search*.txt out.txt core || true on {conn.host}')
     result = conn.run(f'rm -f insert*.txt search*.txt out.txt core || true')
-    print(f'RUN timeout 30m ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host}')
-    result = conn.run(f'timeout 30m ./run.sh {i} {cli_num} {coro_num} {num_servers}')
+    
+    # Wait for i seconds before running the script
+    # print(f'Waiting for {i} seconds before running on {conn.host}...')
+    time.sleep(i)
+    
+    print(f'RUN timeout 5m ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host}')
+    result = conn.run(f'timeout 5m ./run.sh {i} {cli_num} {coro_num} {num_servers}')
     
     if result.return_code == 124:
         print(f'Command ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host} timed out.')

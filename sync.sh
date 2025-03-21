@@ -10,7 +10,7 @@ then
     make ser_cli -j112 > /dev/null
     for cli in ${clis[@]:0:$2}
     do 
-        # echo "sync out cli" $cli
+        echo "sync out cli" $cli
         sshpass -p '1111' scp ./ser_cli congyong@$cli:/home/congyong/
         # sshpass -p '1111' scp ./ser_cli_var_kv congyong@$cli:/home/congyong/
         sshpass -p '1111' scp ../ser_cli.sh congyong@$cli:/home/congyong/

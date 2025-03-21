@@ -328,7 +328,7 @@ Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn
     uintptr_t remote_ptr = seg_rmr.raddr + seg_rmr.rlen - rbuf_size * buf_id; // 从尾部开始分配
     ralloc.SetRemote(remote_ptr, rbuf_size, seg_rmr.raddr, seg_rmr.rlen);
     ralloc.alloc(7 * ALIGNED_SIZE, true); // 提前分配ALIGNED_SIZE，免得读取的时候越界
-    log_err("ralloc start_addr:%lx offset_max:%lu ", ralloc.raddr, ralloc.rsize);
+    // log_err("ralloc start_addr:%lx offset_max:%lu ", ralloc.raddr, ralloc.rsize);
 
     // util variable
     op_cnt = 0;
@@ -338,7 +338,7 @@ Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn
 
     // sync dir
     filter_cache = (FilterCache *)alloc.alloc(sizeof(FilterCache));
-    log_err("init filter_cache");
+    // log_err("init filter_cache");
     memset(&filter_cache->sec_filter[0], 0, sizeof(FilterCache));
     if (cli_id == 0 && coro_id == 0)
     {

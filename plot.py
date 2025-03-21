@@ -23,23 +23,38 @@ def parse_txt_file(file_path):
 def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data, data_dir):
     fig, axs = plt.subplots(1, 3, figsize=(10, 3))
     
+    # 获取所有线程数，以便统一横坐标
+    all_threads = set()
+    for hash_type in iops_data:
+        all_threads.update(iops_data[hash_type].keys())
+    all_threads = sorted(list(all_threads))
+    
+    # 创建非线性映射，将线程数映射到均匀的位置
+    position_mapping = {thread: i for i, thread in enumerate(all_threads)}
+    
     for hash_type, values in iops_data.items():
         threads = sorted(values.keys())
+        # 使用映射后的位置作为X轴位置
+        x_positions = [position_mapping[thread] for thread in threads]
         iops_metrics = [values[thread]['iops'] for thread in threads]
-        axs[0].plot(threads, iops_metrics, marker='o', label=hash_type)
-        axs[0].set_xticks(threads)
-    
+        axs[0].plot(x_positions, iops_metrics, marker='o', label=hash_type)
+        
     for hash_type, values in avg_latency_data.items():
         threads = sorted(values.keys())
+        x_positions = [position_mapping[thread] for thread in threads]
         avg_latency_metrics = [values[thread]['avg_latency'] for thread in threads]
-        axs[1].plot(threads, avg_latency_metrics, marker='o', label=hash_type)
-        axs[1].set_xticks(threads)
-    
+        axs[1].plot(x_positions, avg_latency_metrics, marker='o', label=hash_type)
+        
     for hash_type, values in p99_latency_data.items():
         threads = sorted(values.keys())
+        x_positions = [position_mapping[thread] for thread in threads]
         p99_latency_metrics = [values[thread]['p99_latency'] for thread in threads]
-        axs[2].plot(threads, p99_latency_metrics, marker='o', label=hash_type)
-        axs[2].set_xticks(threads)
+        axs[2].plot(x_positions, p99_latency_metrics, marker='o', label=hash_type)
+    
+    # 设置所有子图的X轴刻度和标签
+    for ax in axs:
+        ax.set_xticks(list(position_mapping.values()))
+        ax.set_xticklabels([str(thread) for thread in all_threads], rotation=45)
     
     axs[0].set_xlabel('Number of Threads')
     axs[0].set_ylabel('IOPS (Kops)')
@@ -48,10 +63,11 @@ def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data, data_dir):
     axs[0].grid(True)
     
     axs[1].set_xlabel('Number of Threads')
-    axs[1].set_ylabel('Latency (us)')
+    # axs[1].set_ylabel('Latency (us)')
+    axs[1].set_ylabel('Latency (us, log scale)')
     axs[1].set_title('Average Latency')
-    # axs[1].set_yscale('log')  # 使用对数坐标轴
-    axs[1].set_ylim(0, 200)
+    axs[1].set_yscale('log')  # 使用对数坐标轴
+    # axs[1].set_ylim(0, 500)
     axs[1].legend()
     axs[1].grid(True)
     
