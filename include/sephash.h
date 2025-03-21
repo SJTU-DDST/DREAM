@@ -130,6 +130,12 @@ struct KVBlock
     uint64_t k_len;
     uint64_t v_len;
     char data[0]; // 变长数组，用来保证KVBlock空间上的连续性，便于RDMA操作
+    
+    bool is_valid() const {
+        return k_len > 0 && k_len <= 10 * 1024 * 1024 && 
+               v_len <= 100 * 1024 * 1024;
+    }
+    
     void print(const char *desc = nullptr)
     {
         if (desc != nullptr)

@@ -7,11 +7,13 @@ experiment_type=${1:-"insert"}
 mode=${2:-"run"}  # 可以是 "run", "rerun" 或 "check"
 
 # 配置
-#num_cli_list=(1 2 4 8 16 24 32 40 48)
-# hash_types=("MYHASH" "SEPHASH" "Plush" "RACE")
-# 56, 112, 168, 224
-num_cli_list=(112 168)
-hash_types=("Plush")
+# num_cli_list=(56 32 16 8 4 1)
+# hash_types=("SEPHASH" "Plush")
+# hash_types=("RACE")
+hash_types=("MYHASH")
+
+num_cli_list=(168 112)
+# hash_types=("Plush")
 
 experiment_script="../scripts/ser_cli_${experiment_type}.sh"
 default_script="../scripts/ser_cli_insert.sh"

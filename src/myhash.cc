@@ -278,6 +278,10 @@ namespace MYHASH
                     co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block, new_main_seg->slots[i].len * ALIGNED_SIZE, lmr->lkey);
 #endif
 #endif
+                    // 验证KVBlock合法性
+                    if (!kv_block->is_valid())
+                        continue;
+
                     pattern = (uint64_t)hash(kv_block->data, kv_block->k_len);
                     new_main_seg->slots[i].dep = pattern >> (local_depth + 1);
                     // if (kv_block->k_len != 8)
@@ -543,7 +547,7 @@ namespace MYHASH
         // 添加data中的项
         for (uint64_t i = 0; i < len; i++)
         {
-            if (data[i].local_depth == local_depth)
+            if (data[i].local_depth == local_depth && data[i].is_valid())
             {
                 auto fp_key = std::make_pair(data[i].fp, data[i].fp_2);
                 SortItem item{
@@ -562,17 +566,20 @@ namespace MYHASH
         // 添加old_seg中的项
         for (uint64_t i = 0; i < old_seg_len; i++)
         {
-            auto fp_key = std::make_pair(old_seg[i].fp, old_seg[i].fp_2);
-            SortItem item{
-                .fp = old_seg[i].fp,
-                .fp_2 = old_seg[i].fp_2,
-                .key_hash = 0,
-                .from_data = false,
-                .index = i,
-                .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
-                .is_delete = false,                 // 初始时不知道是否是删除条目
-                .slot_ptr = &old_seg[i]};
-            sort_items.push_back(item);
+            if (old_seg[i].is_valid())
+            {
+                auto fp_key = std::make_pair(old_seg[i].fp, old_seg[i].fp_2);
+                SortItem item{
+                    .fp = old_seg[i].fp,
+                    .fp_2 = old_seg[i].fp_2,
+                    .key_hash = 0,
+                    .from_data = false,
+                    .index = i,
+                    .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
+                    .is_delete = false,                 // 初始时不知道是否是删除条目
+                    .slot_ptr = &old_seg[i]};
+                sort_items.push_back(item);
+            }
         }
 
         // 3. 为需要读取完整key的项读取key并计算hash
@@ -589,7 +596,17 @@ namespace MYHASH
                 {
                     // 未读取过，执行RDMA读取
                     KVBlock *kv = (KVBlock *)alloc.alloc(slot->len * ALIGNED_SIZE);
+                    memset(kv, 0, slot->len * ALIGNED_SIZE);
+#if CORO_DEBUG
+                    co_await conn->read(offset, seg_rmr.rkey, kv, slot->len * ALIGNED_SIZE, lmr->lkey, std::source_location::current(), std::format("为Slot:{}读取KVBlock, 地址:{}, 长度: {}", slot->to_string(), offset, slot->len * ALIGNED_SIZE));
+#else
                     co_await conn->read(offset, seg_rmr.rkey, kv, slot->len * ALIGNED_SIZE, lmr->lkey);
+#endif
+                    // 验证KVBlock合法性
+                    if (!kv->is_valid())
+                    {
+                        kv->k_len = 8; kv->v_len = 0; // 直接删掉
+                    }
                     kv_cache[offset] = kv;
                 }
 
