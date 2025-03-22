@@ -17,7 +17,7 @@ then
     # echo "server"
     cd /home/congyong/SepHash/build && bash ../sync.sh out 5 && \
     # ./ser_cli_var_kv --server \
-    ./ser_cli --server --auto_run_client \
+    ./ser_cli_var_kv --server --auto_run_client \
     --gid_idx 1 \
     --max_coro 256 --cq_size 64 \
     --mem_size 91268055040 \
@@ -33,14 +33,14 @@ else
             for load_num in 10000000;do
                 echo "num_cli" $num_cli "num_coro" $num_coro "load_num" $load_num "op_num" $num_op
                 # ./ser_cli_var_kv \
-                ./ser_cli \
+                ./ser_cli_var_kv \
                 --server_ip 192.168.98.70 --num_machine $4 --num_cli $num_cli --num_coro $num_coro \
                 --gid_idx 1 \
                 --max_coro 256 --cq_size 64 \
                 --machine_id $1  \
                 --load_num $load_num \
                 --num_op $num_op \
-                --pattern_type 0 \
+                --pattern_type 1 \
                 --insert_frac 0.0 \
                 --read_frac   1.0 \
                 --update_frac  0.0 \

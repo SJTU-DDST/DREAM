@@ -6,23 +6,29 @@
 #include "plush_single_filter.h"
 #include "race.h"
 #include "sephash.h"
+#include "sephash_zip.h"
+#include "myhash.h"
 #include "split_batch.h"
 #include "split_hash.h"
 #include "split_hash_idle.h"
 #include "split_inline_dep.h"
 #include "split_search_base.h"
 #include "split_search_fptable.h"
+#include "split_search_fptable_wocache.h"
 #include <set>
 #include <stdint.h>
+#include <barrier>
 #define ORDERED_INSERT
+#define ALLOW_KEY_OVERLAP
 Config config;
 uint64_t load_num;
-using ClientType = SEPHASH::Client;
-using ServerType = SEPHASH::Server;
-using Slice = SEPHASH::Slice;
 
-constexpr uint64_t key_len = 2;
-constexpr uint64_t value_len = 4096;
+using ClientType = HASH_TYPE::Client;
+using ServerType = HASH_TYPE::Server;
+using Slice = HASH_TYPE::Slice;
+
+constexpr uint64_t key_len = 2; // 2 * 8B = 16B
+constexpr uint64_t value_len = 32; // 32B
 
 void GenKey(uint64_t key, uint64_t *tmp_key)
 {
@@ -36,10 +42,13 @@ void GenKey(uint64_t key, uint64_t *tmp_key)
         tmp_key[i] = data_key;
 }
 
+std::unique_ptr<std::barrier<>> barrier;
+
 template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
+    barrier->arrive_and_wait();
     co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
     uint64_t tmp_key[key_len];
     Slice key, value;
@@ -55,6 +64,7 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
                tmp_key);
         co_await cli->insert(&key, &value);
     }
+    barrier->arrive_and_wait();
     co_await cli->stop();
     co_return;
 }
@@ -63,6 +73,7 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
+    barrier->arrive_and_wait();
     co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
     uint64_t tmp_key[key_len];
     char buffer[8192];
@@ -94,20 +105,28 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         op_frac = op_chooser();
         if (op_frac < config.insert_frac)
         {
+#ifdef ALLOW_KEY_OVERLAP
+            GenKey(load_num + gen->operator()(key_chooser()), tmp_key);
+#else
             GenKey(load_num +
                        (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
                        gen->operator()(key_chooser()),
                    tmp_key);
+#endif
             co_await cli->insert(&key, &value);
         }
         else if (op_frac < read_frac)
         {
             ret_value.len = 0;
+#ifdef ALLOW_KEY_OVERLAP
+            GenKey(gen->operator()(key_chooser()), tmp_key);
+#else
             GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
                        gen->operator()(key_chooser()),
                    tmp_key);
+#endif
             co_await cli->search(&key, &ret_value);
             // if (ret_value.len != value.len || memcmp(ret_value.data, value.data, value.len) != 0)
             // {
@@ -119,10 +138,14 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         else if (op_frac < update_frac)
         {
             // update
+#ifdef ALLOW_KEY_OVERLAP
+            GenKey(gen->operator()(key_chooser()), tmp_key);
+#else
             GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
                        gen->operator()(key_chooser()),
                    tmp_key);
+#endif
             co_await cli->update(&key, &update_value);
             // auto [slot_ptr, slot] = co_await cli->search(&key, &ret_value);
             // if (slot_ptr == 0ull)
@@ -137,10 +160,14 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         else
         {
             // delete
+#ifdef ALLOW_KEY_OVERLAP
+            GenKey(gen->operator()(key_chooser()), tmp_key);
+#else
             GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
                        gen->operator()(key_chooser()),
                    tmp_key);
+#endif
             co_await cli->remove(&key);
             // uint64_t cnt = 0;
             // while(true){
@@ -157,6 +184,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
             // }
         }
     }
+    barrier->arrive_and_wait();
     co_await cli->stop();
     co_return;
 }
@@ -164,12 +192,13 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 int main(int argc, char *argv[])
 {
     config.ParseArg(argc, argv);
+    barrier = std::make_unique<std::barrier<>>(config.num_cli * config.num_coro);
     load_num = config.load_num;
     if (config.is_server)
     {
         ServerType ser(config);
-        while (true)
-            ;
+        // while (true)
+        //     ;
     }
     else
     {
@@ -189,7 +218,7 @@ int main(int argc, char *argv[])
             rdma_clis[i] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
             rdma_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
             assert(rdma_conns[i] != nullptr);
-            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
+            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Signal, 0}); // use wowait conn for signal
             assert(rdma_wowait_conns[i] != nullptr);
             for (uint64_t j = 0; j < config.num_coro; j++)
             {
@@ -211,20 +240,20 @@ int main(int argc, char *argv[])
 
         if (config.machine_id == 0 && rehash_flag)
         {
-            rdma_clis[config.num_cli] =
-                new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
-            rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
+            // rdma_clis[config.num_cli] =
+            //     new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
+            // rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
+            // rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
 
-            lmrs[config.num_cli * config.num_coro] =
-                dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
-            ClientType *rehash_cli = new ClientType(
-                config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
-                rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
-            auto th = [&](rdma_client *rdma_cli) {
-                // rdma_cli->run(rehash_cli->rehash(exit_flag));
-            };
-            ths[config.num_cli] = std::thread(th, rdma_clis[config.num_cli]);
+            // lmrs[config.num_cli * config.num_coro] =
+            //     dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
+            // ClientType *rehash_cli = new ClientType(
+            //     config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
+            //     rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
+            // auto th = [&](rdma_client *rdma_cli) {
+            //     // rdma_cli->run(rehash_cli->rehash(exit_flag));
+            // };
+            // ths[config.num_cli] = std::thread(th, rdma_clis[config.num_cli]);
         }
 
         printf("Load start\n");
@@ -254,7 +283,11 @@ int main(int argc, char *argv[])
         // ths[config.num_cli].join();
 
         printf("Run start\n");
+#ifdef ALLOW_KEY_OVERLAP
+        auto op_per_coro = config.num_op; // load_num for update
+#else
         auto op_per_coro = config.num_op / (config.num_machine * config.num_cli * config.num_coro);
+#endif
         std::vector<Generator *> gens;
         for (uint64_t i = 0; i < config.num_cli * config.num_coro; i++)
         {
@@ -303,28 +336,28 @@ int main(int argc, char *argv[])
         exit_flag.store(false);
         if (config.machine_id == 0 && rehash_flag)
         {
-            ths[config.num_cli].join();
+            // ths[config.num_cli].join();
         }
         if (config.machine_id != 0 && rehash_flag)
         {
-            rdma_clis[config.num_cli] =
-                new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
-            rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
+            // rdma_clis[config.num_cli] =
+            //     new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
+            // rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
+            // rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip.c_str());
 
-            lmrs[config.num_cli * config.num_coro] =
-                dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
-            ClientType *check_cli = new ClientType(
-                config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
-                rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
+            // lmrs[config.num_cli * config.num_coro] =
+            //     dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
+            // ClientType *check_cli = new ClientType(
+            //     config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
+            //     rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
 
-            auto th = [&](rdma_client *rdma_cli) {
-                // while(rdma_cli->run(check_cli->check_exit())){
-                // log_err("waiting for rehash exit");
-                // }
-            };
-            ths[config.num_cli] = std::thread(th, rdma_clis[config.num_cli]);
-            ths[config.num_cli].join();
+            // auto th = [&](rdma_client *rdma_cli) {
+            //     // while(rdma_cli->run(check_cli->check_exit())){
+            //     // log_err("waiting for rehash exit");
+            //     // }
+            // };
+            // ths[config.num_cli] = std::thread(th, rdma_clis[config.num_cli]);
+            // ths[config.num_cli].join();
         }
 
         if (config.machine_id == 0)

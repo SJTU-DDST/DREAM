@@ -30,7 +30,7 @@ else
 
     for num_cli in `seq $2 $2`;do
         for num_coro in `seq 1 $3`;do
-            for load_num in 0;do
+            for load_num in 10000000;do
                 echo "num_cli" $num_cli "num_coro" $num_coro "load_num" $load_num "op_num" $num_op
                 # ./ser_cli_var_kv \
                 ./ser_cli_var_kv \
@@ -40,7 +40,7 @@ else
                 --machine_id $1  \
                 --load_num $load_num \
                 --num_op $num_op \
-                --pattern_type 1 \
+                --pattern_type 2 \
                 --insert_frac 0.0 \
                 --read_frac   0.0 \
                 --update_frac  1.0 \

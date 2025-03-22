@@ -61,8 +61,8 @@ def client_command(i):
     # print(f'Waiting for {i} seconds before running on {conn.host}...')
     time.sleep(i)
     
-    print(f'RUN timeout 5m ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host}')
-    result = conn.run(f'timeout 5m ./run.sh {i} {cli_num} {coro_num} {num_servers}')
+    print(f'RUN timeout 3m ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host}')
+    result = conn.run(f'timeout 3m ./run.sh {i} {cli_num} {coro_num} {num_servers}')
     
     if result.return_code == 124:
         print(f'Command ./run.sh {i} {cli_num} {coro_num} {num_servers} on {conn.host} timed out.')

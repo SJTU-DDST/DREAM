@@ -7,12 +7,14 @@ experiment_type=${1:-"insert"}
 mode=${2:-"run"}  # 可以是 "run", "rerun" 或 "check"
 
 # 配置
-# num_cli_list=(56 32 16 8 4 1)
-# hash_types=("SEPHASH" "Plush")
+num_cli_list=(112)
+# num_cli_list=(1 4 8 16 32 56 112 168 224)
 # hash_types=("RACE")
+# hash_types=("Plush" "SEPHASH" "MYHASH")
 hash_types=("MYHASH")
 
-num_cli_list=(168 112)
+# num_cli_list=(224)
+# num_cli_list=(168 112)
 # hash_types=("Plush")
 
 experiment_script="../scripts/ser_cli_${experiment_type}.sh"
@@ -67,6 +69,8 @@ set_fp_collision_mode() {
 # 如果实验类型包含"insert"且不是check模式，设置fp碰撞模式为false
 if [[ "$experiment_type" == *"insert"* ]] && [ "$mode" != "check" ]; then
     set_fp_collision_mode false
+else
+    set_fp_collision_mode true
 fi
 
 # 重新运行模式或仅检查模式

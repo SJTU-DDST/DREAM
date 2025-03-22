@@ -19,7 +19,7 @@
 #include <stdint.h>
 #include <barrier>
 #define ORDERED_INSERT
-// #define ALLOW_KEY_OVERLAP
+#define ALLOW_KEY_OVERLAP
 Config config;
 uint64_t load_num;
 
@@ -42,8 +42,6 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
-    // The synchronization using start/stop is canceled because it crashes with a large number of threads
-    // on a single node. Since the number of operations is sufficient, it does not significantly affect performance.
     barrier->arrive_and_wait();
     co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
     uint64_t tmp_key;

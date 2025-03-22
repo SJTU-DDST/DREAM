@@ -116,6 +116,15 @@ def main(data_root_dir):
                     if p99_latency is not None:
                         p99_latency_list.append(p99_latency)
                 
+                # Check for significant IOPS variations, maybe old out.txt files are not cleaned up
+                if len(iops_list) > 1:
+                    avg_iops = sum(iops_list) / len(iops_list)
+                    max_deviation = max([abs(iops - avg_iops) / avg_iops for iops in iops_list])
+                    if max_deviation > 0.01:  # If any value deviates more than 10% from the average
+                        print(f"WARNING: Significant IOPS variation detected in {data_dir}/{hash_type}, threads={thread_count}")
+                        print(f"  IOPS values: {iops_list}")
+                        print(f"  Average: {avg_iops:.2f}, Max deviation: {max_deviation*100:.2f}%")
+                
                 avg_iops = sum(iops_list) / len(iops_list) if iops_list else None
                 avg_avg_latency = sum(avg_latency_list) / len(avg_latency_list) if avg_latency_list else None
                 avg_p99_latency = sum(p99_latency_list) / len(p99_latency_list) if p99_latency_list else None
