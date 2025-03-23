@@ -30,7 +30,6 @@
 #if MODIFIED
 // Modified
 #define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
-#define LARGER_FP_FILTER_GRANULARITY 1 // 使用更大的FP过滤粒度，避免写入FP过滤器前需要先读取。现在先用每个FP占用64bit粒度，可能可以改成8bit。TODO: 读取filter的地方还没改。
 #define USE_XRC 1 // 使用XRC
 #define SPLIT_LOCAL_LOCK 1 // 合并/分裂时在本地上锁，参考Sherman
 
@@ -56,6 +55,7 @@
 #endif
 
 // Config
+#define LARGER_FP_FILTER_GRANULARITY 1 // 使用更大的FP过滤粒度，避免写入FP过滤器前需要先读取。现在每个FP占用8bit粒度。
 #define READ_FULL_KEY_ON_FP_COLLISION 1 // fp相同时读取完整key比较
 #define USE_DM_MR 1         // CLEVEL使用DM MR，目前设备不支持
 #define LOW_MIN_RTR_TIMER 1 // 低延迟模式

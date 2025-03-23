@@ -8,12 +8,12 @@ mode=${2:-"run"}  # 可以是 "run", "rerun" 或 "check"
 
 # 配置
 # num_cli_list=(112)
-num_cli_list=(1 4 8 16 32 56 112 168 224)
+# num_cli_list=(1 4 8 16 32 56 112 168 224)
 # hash_types=("RACE")
-hash_types=("Plush" "SEPHASH" "MYHASH" "RACE")
-# hash_types=("MYHASH")
+# hash_types=("Plush" "SEPHASH" "MYHASH" "RACE")
+hash_types=("SEPHASH")
 
-# num_cli_list=(224)
+num_cli_list=(112)
 # num_cli_list=(168 112)
 # hash_types=("Plush")
 

@@ -70,12 +70,12 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
 
     if (config.auto_run_client)
     {
-        log_err("auto run client");
-        config.print();
+        // log_err("auto run client");
+        // config.print();
 
         ser.start_serve(nullptr, 1, zero_qp_cap, rdma_default_tempmp_size, rdma_default_max_coros, rdma_default_cq_size, rdma_default_port, dir);
 
-        log_err("start clients with run.py");
+        // log_err("start clients with run.py");
         // int result = system("python3 ../run.py 1 client 8 1");
         std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
         log_err("Auto run client command: %s", command.c_str());

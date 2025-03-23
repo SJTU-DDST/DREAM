@@ -20,6 +20,7 @@
 #include <barrier>
 #define ORDERED_INSERT
 #define ALLOW_KEY_OVERLAP
+#define FIXED_LOAD_SETUP
 Config config;
 uint64_t load_num;
 
@@ -48,8 +49,17 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
+    // All threads arrive at barrier before any starts
     barrier->arrive_and_wait();
-    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+    
+    // Only first coroutine in each machine calls start
+    if (cli_id == 0 && coro_id == 0) {
+        co_await cli->start(config.num_machine);
+    }
+    
+    // Make sure start completes before any thread proceeds
+    barrier->arrive_and_wait();
+    
     uint64_t tmp_key[key_len];
     Slice key, value;
     std::string tmp_value = std::string(value_len, '1');
@@ -57,6 +67,25 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
     value.data = (char *)tmp_value.data();
     key.len = key_len * sizeof(uint64_t);
     key.data = (char *)tmp_key;
+    
+#ifdef FIXED_LOAD_SETUP
+    // Fixed setup: 1 machine, 16 clients, 1 coroutine
+    const uint64_t fixed_num_machine = 1;
+    const uint64_t fixed_num_cli = std::min(config.num_cli, 16ul);
+    const uint64_t fixed_num_coro = 1;
+    uint64_t num_op = load_num / (fixed_num_machine * fixed_num_cli * fixed_num_coro);
+    
+    if (config.machine_id == 0 && coro_id == 0 && cli_id < fixed_num_cli) {
+        for (uint64_t i = 0; i < num_op; i++)
+        {
+            // if (i % 100000 == 0)
+            //     log_err("cli_id:%lu coro_id:%lu Load Progress: %lu/%lu", cli_id, coro_id, i, num_op);
+            GenKey((cli_id * fixed_num_coro) * num_op + i, tmp_key);
+            co_await cli->insert(&key, &value);
+        }
+    }
+#else
+    // Original version
     uint64_t num_op = load_num / (config.num_machine * config.num_cli * config.num_coro);
     for (uint64_t i = 0; i < num_op; i++)
     {
@@ -64,8 +93,19 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
                tmp_key);
         co_await cli->insert(&key, &value);
     }
+#endif
+
+    // All threads wait at barrier before stopping
     barrier->arrive_and_wait();
-    co_await cli->stop();
+    
+    // Only first coroutine in each machine calls stop
+    if (cli_id == 0 && coro_id == 0) {
+        co_await cli->stop();
+    }
+    
+    // Wait for stop to complete before any thread returns
+    barrier->arrive_and_wait();
+    
     co_return;
 }
 
@@ -73,8 +113,17 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
+    // All threads arrive at barrier before any starts
     barrier->arrive_and_wait();
-    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+
+    // Only first coroutine in each machine calls start
+    if (cli_id == 0 && coro_id == 0)
+    {
+        co_await cli->start(config.num_machine);
+    }
+
+    // Make sure start completes before any thread proceeds
+    barrier->arrive_and_wait();
     uint64_t tmp_key[key_len];
     char buffer[8192];
     Slice key, value, ret_value, update_value;
@@ -102,6 +151,8 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
     // uint64_t load_avr = num_op;
     for (uint64_t i = 0; i < num_op; i++)
     {
+        // if (i % 1000000 == 0)
+        //     log_err("cli_id:%lu coro_id:%lu Run Progress: %lu/%lu", cli_id, coro_id, i, num_op);
         op_frac = op_chooser();
         if (op_frac < config.insert_frac)
         {
@@ -184,8 +235,17 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
             // }
         }
     }
+    // All threads wait at barrier before stopping
     barrier->arrive_and_wait();
-    co_await cli->stop();
+
+    // Only first coroutine in each machine calls stop
+    if (cli_id == 0 && coro_id == 0)
+    {
+        co_await cli->stop();
+    }
+
+    // Wait for stop to complete before any thread returns
+    barrier->arrive_and_wait();
     co_return;
 }
 
