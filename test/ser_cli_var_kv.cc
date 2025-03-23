@@ -151,7 +151,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
     // uint64_t load_avr = num_op;
     for (uint64_t i = 0; i < num_op; i++)
     {
-        // if (i % 1000000 == 0)
+        // if (i % 100000 == 0)
         //     log_err("cli_id:%lu coro_id:%lu Run Progress: %lu/%lu", cli_id, coro_id, i, num_op);
         op_frac = op_chooser();
         if (op_frac < config.insert_frac)

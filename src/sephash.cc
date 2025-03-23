@@ -515,15 +515,15 @@ Retry:
         auto bit_loc = get_fp_bit(tmp->fp, tmp->fp_2);
         uintptr_t fp_ptr = segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType);
         // 远端的seg_meta->fp_bitmap[bit_loc]写入00000001。这里不用seg_meta，先alloc.alloc申请一个8byte buffer，写入00000001，然后写入远端。
-        CurSegMeta *tmp_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+        FpBitmapType *tmp_fp_bitmap = (FpBitmapType *)alloc.alloc(sizeof(FpBitmapType));
         if (seg_meta.find(segloc) == seg_meta.end())
         {
             seg_meta[segloc] = CurSegMeta();
             memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
         }
         seg_meta[segloc].fp_bitmap[bit_loc] = 1;
-        // memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
-        co_await conn->write(fp_ptr, seg_rmr.rkey, &tmp_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
+        *tmp_fp_bitmap = 1;
+        co_await conn->write(fp_ptr, seg_rmr.rkey, tmp_fp_bitmap, sizeof(FpBitmapType), lmr->lkey);
 #else
     auto [bit_loc, bit_info] = get_fp_bit(tmp->fp, tmp->fp_2);
     uintptr_t fp_ptr = segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType);
@@ -1297,9 +1297,9 @@ Retry:
     for (uint64_t i = 0; i < end_pos - start_pos; i++)
     {
 #if HASH_TYPE == MYHASH // MYHASH: 只有fp_2匹配的才读取并检查完整key
-        if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info && main_seg[i].fp_2 == pattern_fp2)
+        if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info && main_seg[i].fp_2 == pattern_fp2 && main_seg[i].is_valid())
 #else // SepHash: 不论fp_2是否匹配，都读取并检查完整key
-        if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info)
+        if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info && main_seg[i].is_valid())
 #endif
         {
             uintptr_t kv_ptr = ralloc.ptr(main_seg[i].offset);
@@ -1343,9 +1343,9 @@ Retry:
             // curseg_slots[i].print();
             // IMPORTANT: 对于MYHASH(curseg_slots[i].local_depth != 0)，还要匹配local_depth，不匹配的是乐观写入时写错segment的条目
 #if HASH_TYPE == MYHASH
-            if (curseg_slots[i] != 0 && curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].dep == dep_info && curseg_slots[i].fp_2 == pattern_fp2 && curseg_slots[i].local_depth == my_seg_meta->local_depth)
+            if (curseg_slots[i] != 0 && curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].dep == dep_info && curseg_slots[i].fp_2 == pattern_fp2 && curseg_slots[i].local_depth == my_seg_meta->local_depth && curseg_slots[i].is_valid())
 #else
-            if (curseg_slots[i] != 0 && curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].dep == dep_info && curseg_slots[i].fp_2 == pattern_fp2)
+            if (curseg_slots[i] != 0 && curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].dep == dep_info && curseg_slots[i].fp_2 == pattern_fp2 && curseg_slots[i].is_valid())
 #endif
             {
                 uintptr_t kv_ptr = ralloc.ptr(curseg_slots[i].offset);

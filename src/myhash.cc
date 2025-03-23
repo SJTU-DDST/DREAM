@@ -78,7 +78,7 @@ namespace MYHASH
 
         // a2. send slot
         static int send_cnt = 0;
-        perf.start_perf();
+        // perf.start_perf();
 
         if (seg_meta.find(segloc) == seg_meta.end())
         {
@@ -119,7 +119,7 @@ namespace MYHASH
 #endif
         co_await std::move(send_slot);
         log_test("发送slot到segloc:%lu srq_num:%u完成", segloc, seg_meta[segloc].srq_num);
-        perf.push_perf("send_slot");
+        // perf.push_perf("send_slot");
         // log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
 
         // a3. fetch and add slot_cnt

@@ -7,16 +7,10 @@ experiment_type=${1:-"insert"}
 mode=${2:-"run"}  # 可以是 "run", "rerun" 或 "check"
 
 # 配置
-# num_cli_list=(112)
-# num_cli_list=(1 4 8 16 32 56 112 168 224)
-# hash_types=("RACE")
+num_cli_list=(1 4 8 16 32 56 112 168 224)
 # hash_types=("Plush" "SEPHASH" "MYHASH" "RACE")
+# num_cli_list=(112)
 hash_types=("SEPHASH")
-
-num_cli_list=(112)
-# num_cli_list=(168 112)
-# hash_types=("Plush")
-
 experiment_script="../scripts/ser_cli_${experiment_type}.sh"
 default_script="../scripts/ser_cli_insert.sh"
 
@@ -93,7 +87,7 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
             # 检查该目录下的所有输出文件
             need_rerun=false
             for filename in "$base_dir"/out*.txt; do
-                echo "检查 ${filename}"
+                # echo "检查 ${filename}"
                 if [ -f "$filename" ] && ! grep -q "Run IOPS:" "$filename"; then
                     need_rerun=true
                     break
@@ -153,7 +147,7 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
             fi
         done
         
-        echo "重新运行检查 ${hash_type} 完成"
+        # echo "重新运行检查 ${hash_type} 完成"
         reset_hash_type
     done
     
