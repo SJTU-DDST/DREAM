@@ -1,6 +1,14 @@
 import os
 import re
 import matplotlib.pyplot as plt
+import numpy as np
+
+hat = ['//', '\\\\', 'xx', '||', '--', '++']
+markers = ['H', '^', '>', 'D', 'o', 's', 'p', 'x']
+c = np.array([[102, 194, 165], [252, 141, 98], [141, 160, 203], 
+        [231, 138, 195], [166,216,84], [255, 217, 47],
+        [229, 196, 148], [179, 179, 179]])
+c  = c/255
 
 def parse_txt_file(file_path):
     with open(file_path, 'r') as file:
@@ -32,24 +40,27 @@ def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data, data_dir):
     # 创建非线性映射，将线程数映射到均匀的位置
     position_mapping = {thread: i for i, thread in enumerate(all_threads)}
     
-    for hash_type, values in iops_data.items():
+    for i, (hash_type, values) in enumerate(iops_data.items()):
         threads = sorted(values.keys())
         # 使用映射后的位置作为X轴位置
         x_positions = [position_mapping[thread] for thread in threads]
         iops_metrics = [values[thread]['iops'] for thread in threads]
-        axs[0].plot(x_positions, iops_metrics, marker='o', label=hash_type)
+        axs[0].plot(x_positions, iops_metrics, marker=markers[i % len(markers)], label=hash_type, 
+                    color=c[i % len(c)], lw=3, mec='black', markersize=8, alpha=1)
         
-    for hash_type, values in avg_latency_data.items():
+    for i, (hash_type, values) in enumerate(avg_latency_data.items()):
         threads = sorted(values.keys())
         x_positions = [position_mapping[thread] for thread in threads]
         avg_latency_metrics = [values[thread]['avg_latency'] for thread in threads]
-        axs[1].plot(x_positions, avg_latency_metrics, marker='o', label=hash_type)
+        axs[1].plot(x_positions, avg_latency_metrics, marker=markers[i % len(markers)], label=hash_type,
+                    color=c[i % len(c)], lw=3, mec='black', markersize=8, alpha=1)
         
-    for hash_type, values in p99_latency_data.items():
+    for i, (hash_type, values) in enumerate(p99_latency_data.items()):
         threads = sorted(values.keys())
         x_positions = [position_mapping[thread] for thread in threads]
         p99_latency_metrics = [values[thread]['p99_latency'] for thread in threads]
-        axs[2].plot(x_positions, p99_latency_metrics, marker='o', label=hash_type)
+        axs[2].plot(x_positions, p99_latency_metrics, marker=markers[i % len(markers)], label=hash_type,
+                    color=c[i % len(c)], lw=3, mec='black', markersize=8, alpha=1)
     
     # 设置所有子图的X轴刻度和标签
     for ax in axs:
@@ -120,7 +131,7 @@ def main(data_root_dir):
                 if len(iops_list) > 1:
                     avg_iops = sum(iops_list) / len(iops_list)
                     max_deviation = max([abs(iops - avg_iops) / avg_iops for iops in iops_list])
-                    if max_deviation > 0.01:  # If any value deviates more than 10% from the average
+                    if max_deviation > 0.1:  # If any value deviates more than 10% from the average
                         print(f"WARNING: Significant IOPS variation detected in {data_dir}/{hash_type}, threads={thread_count}")
                         print(f"  IOPS values: {iops_list}")
                         print(f"  Average: {avg_iops:.2f}, Max deviation: {max_deviation*100:.2f}%")

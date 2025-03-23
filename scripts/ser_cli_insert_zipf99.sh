@@ -15,7 +15,7 @@ num_op=10000000
 if [ "$1" = "server" ]
 then
     # echo "server"
-    cd /home/congyong/SepHash/build && bash ../sync.sh out 5 && \
+    cd /home/congyong/SepHash/build && bash ../sync.sh out $4 && \
     # ./ser_cli_var_kv --server \
     ./ser_cli --server --auto_run_client \
     --gid_idx 1 \
@@ -23,7 +23,7 @@ then
     --mem_size 91268055040 \
     --num_cli $2 --num_coro $3 --num_machine $4
 
-    bash ../sync.sh in 5
+    bash ../sync.sh in $4
     # grep -H . ./out*.txt
 else
     echo "machine" $1 "num_machine" $4

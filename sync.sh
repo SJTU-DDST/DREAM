@@ -6,13 +6,13 @@
 clis=("192.168.98.74" "192.168.98.73" "192.168.98.72" "192.168.98.71")
 if [ "$1" = "out" ]
 then
-    # make ser_cli_var_kv -j112
+    make ser_cli_var_kv -j112 > /dev/null
     make ser_cli -j112 > /dev/null
     for cli in ${clis[@]:0:$2}
     do 
         echo "sync out cli" $cli
         sshpass -p '1111' scp ./ser_cli congyong@$cli:/home/congyong/
-        # sshpass -p '1111' scp ./ser_cli_var_kv congyong@$cli:/home/congyong/
+        sshpass -p '1111' scp ./ser_cli_var_kv congyong@$cli:/home/congyong/
         sshpass -p '1111' scp ../ser_cli.sh congyong@$cli:/home/congyong/
         sshpass -p '1111' scp ../run.sh congyong@$cli:/home/congyong/
     done
