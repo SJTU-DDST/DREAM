@@ -287,7 +287,7 @@ class Client : public BasicDB
     Config &config;
 
     task<> sync_dir();
-    task<uintptr_t> check_gd(uint64_t segloc = -1, bool read_fp = false);
+    task<uintptr_t> check_gd(uint64_t segloc = -1, bool read_fp = false, bool recursive = false);
 
     task<> Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_meta);
 #if READ_FULL_KEY_ON_FP_COLLISION

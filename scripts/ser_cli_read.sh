@@ -40,7 +40,7 @@ else
                 --machine_id $1  \
                 --load_num $load_num \
                 --num_op $num_op \
-                --pattern_type 0 \
+                --pattern_type 1 \
                 --insert_frac 0.0 \
                 --read_frac   1.0 \
                 --update_frac  0.0 \

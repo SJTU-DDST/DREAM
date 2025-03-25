@@ -103,7 +103,7 @@ void Server::Init()
     // Set MainTable to zero
     dir->global_depth = INIT_DEPTH;
 
-    // Init CurTable
+    // Init CurTable for initial segments
     CurSeg *cur_seg;
     for (uint64_t i = 0; i < (1 << dir->global_depth); i++)
     {
@@ -114,6 +114,22 @@ void Server::Init()
         cur_seg->seg_meta.local_depth = INIT_DEPTH;
         cur_seg->seg_meta.sign = 1;
     }
+    
+#if HASH_TYPE == MYHASH
+    // Initialize remaining entries in the directory (up to 65536)
+    // Each entry at index i+(1<<INIT_DEPTH) is initialized with values from segs[i%(1<<INIT_DEPTH)]
+    const uint64_t init_entries = (1 << INIT_DEPTH);
+
+    for (uint64_t i = init_entries; i < DIR_SIZE; i++)
+    {
+        uint64_t base_idx = i % init_entries;
+        dir->segs[i].cur_seg_ptr = dir->segs[base_idx].cur_seg_ptr;
+        dir->segs[i].local_depth = dir->segs[base_idx].local_depth;
+        dir->segs[i].main_seg_ptr = dir->segs[base_idx].main_seg_ptr;
+        dir->segs[i].main_seg_len = dir->segs[base_idx].main_seg_len;
+        // Copy any other fields that need to be initialized
+    }
+#endif
 }
 
 Server::~Server()
@@ -290,49 +306,76 @@ task<> Client::stop()
 
 task<> Client::sync_dir()
 {
+    // First read the current directory information
     co_await conn->read(seg_rmr.raddr, seg_rmr.rkey, &dir->global_depth, 2 * sizeof(uint64_t), lmr->lkey);
+    
+    // Read all directory entries for the current directory size
+    uint64_t current_dir_size = (1 << dir->global_depth);
     co_await conn->read(seg_rmr.raddr + sizeof(uint64_t), seg_rmr.rkey, dir->segs,
-                        (1 << dir->global_depth) * sizeof(DirEntry), lmr->lkey);
-    uint64_t dir_size = (1 << dir->global_depth);
-    for(uint64_t i = 0 ; i < dir_size ; i++){
+                        current_dir_size * sizeof(DirEntry), lmr->lkey);
+    
+    // Initialize the offset array with values from the actual segments
+    for(uint64_t i = 0; i < current_dir_size; i++) {
         this->offset[i].main_seg_ptr = dir->segs[i].main_seg_ptr;
     }
+
+#if HASH_TYPE == MYHASH
+    // Initialize the remaining entries in the directory (up to 65536)
+    // Each entry at index i+current_dir_size is initialized with values from segs[i%current_dir_size]
+    for (uint64_t i = current_dir_size; i < DIR_SIZE; i++)
+    {
+        uint64_t base_idx = i % current_dir_size;
+        dir->segs[i].cur_seg_ptr = dir->segs[base_idx].cur_seg_ptr;
+        dir->segs[i].local_depth = dir->segs[base_idx].local_depth;
+        dir->segs[i].main_seg_ptr = dir->segs[base_idx].main_seg_ptr;
+        dir->segs[i].main_seg_len = dir->segs[base_idx].main_seg_len;
+    }
+#endif
 }
 
 /// @brief 读取远端的Global Depth
 /// @return
-task<uintptr_t> Client::check_gd(uint64_t segloc, bool read_fp)
+task<uintptr_t> Client::check_gd(uint64_t segloc, bool read_fp, bool recursive)
 {
-    if(segloc!=-1){
-        uintptr_t dentry_ptr = seg_rmr.raddr + sizeof(uint64_t) + segloc*sizeof(DirEntry);
-        uint64_t read_size = (read_fp)?sizeof(DirEntry):4*sizeof(uint64_t);
+    if (segloc != -1)
+    {
+        uint64_t old_local_depth = dir->segs[segloc].local_depth;
+        uintptr_t dentry_ptr = seg_rmr.raddr + sizeof(uint64_t) + segloc * sizeof(DirEntry);
+        uint64_t read_size = (read_fp) ? sizeof(DirEntry) : 4 * sizeof(uint64_t);
 
-        // auto before_seg = dir->segs[segloc];
-        // auto before_global_depth = dir->global_depth;
-
-        // 读取DirEntry
-        // TODO: 此处不只读取dir->segs[segloc]，而是根据可选参数delta_depth=0，从segloc往上读取delta_depth bits种情况下的segloc
-        // 例如: segloc=0b0, delta_depth=1，则读取0b00, 0b10，如果delta_depth=2，则读取0b000, 0b100, 0b010, 0b110
-
-        // for (int i = 0; i < (1<<delta_depth); i++)
-
-        auto read_cur_ptr = wo_wait_conn->read(dentry_ptr, seg_rmr.rkey, &dir->segs[segloc],read_size, lmr->lkey);
-
-        // 读取global_depth
+        auto read_cur_ptr = wo_wait_conn->read(dentry_ptr, seg_rmr.rkey, &dir->segs[segloc], read_size, lmr->lkey);
         co_await conn->read(seg_rmr.raddr, seg_rmr.rkey, &dir->global_depth, sizeof(uint64_t), lmr->lkey);
-        // if (before_global_depth != dir->global_depth)
-        //     log_err("[%lu:%lu:%lu]check_gd更新本地dir->global_depth:%lu -> %lu", cli_id, coro_id, this->key_num, before_global_depth, dir->global_depth);
-
         co_await read_cur_ptr;
-        // if (before_seg.local_depth != dir->segs[segloc].local_depth || before_seg.cur_seg_ptr != dir->segs[segloc].cur_seg_ptr || before_seg.main_seg_len != dir->segs[segloc].main_seg_len)
-        //     log_err("[%lu:%lu:%lu]check_gd更新本地dir->segs[%lu]:local_depth:%lu -> %lu cur_seg_ptr:%lx -> %lx main_seg_ptr:%lx -> %lx main_seg_len:%lx -> %lx", cli_id, coro_id, this->key_num, segloc, before_seg.local_depth, dir->segs[segloc].local_depth, before_seg.cur_seg_ptr, dir->segs[segloc].cur_seg_ptr, before_seg.main_seg_ptr, dir->segs[segloc].main_seg_ptr, before_seg.main_seg_len, dir->segs[segloc].main_seg_len);
+
+        if (recursive && dir->segs[segloc].local_depth != old_local_depth)
+        {
+            // log_err("[%lu:%lu:%lu]check_gd本地segloc:%lu的local_depth:%lu->%lu",cli_id,coro_id,this->key_num,segloc,old_local_depth,dir->segs[segloc].local_depth);
+
+            // 递归读取新增加的位图示的segment
+            uint64_t new_local_depth = dir->segs[segloc].local_depth;
+
+            // 逐位递增读取所有可能的新segment
+            for (uint64_t depth = old_local_depth + 1; depth <= new_local_depth; depth++)
+            {
+                // 计算当前depth下，新增的bit位置
+                uint64_t bit_pos = depth - 1; // 0-indexed bit position
+
+                // 计算新的segloc，在原始segloc的基础上，设置新的bit
+                uint64_t new_segloc = segloc | (1ULL << bit_pos);
+
+                // 只有当new_segloc与当前segloc不同时才递归读取
+                if (new_segloc != segloc)
+                {
+                    // log_err("[%lu:%lu:%lu]递归读取新的segloc:%lu",cli_id,coro_id,this->key_num,new_segloc);
+                    assert_require(new_segloc < (1ULL << dir->global_depth));
+                    co_await check_gd(new_segloc, read_fp, true);
+                }
+            }
+        }
         co_return dir->segs[segloc].cur_seg_ptr;
     }
-    // auto before_global_depth = dir->global_depth;
     co_await conn->read(seg_rmr.raddr, seg_rmr.rkey, &dir->global_depth, sizeof(uint64_t), lmr->lkey);
-    // if (before_global_depth != dir->global_depth)
-    //     log_err("check_gd更新本地dir->global_depth:%lu -> %lu", before_global_depth, dir->global_depth);
-    co_return 0;    
+    co_return 0;
 }
 
 task<> Client::insert(Slice *key, Slice *value)

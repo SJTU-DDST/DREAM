@@ -17,10 +17,19 @@ def parse_txt_file(file_path):
     iops_match = re.search(r'Run IOPS:(\d+\.\d+)Kops', content)
     iops = float(iops_match.group(1)) if iops_match else None
     
-    avg_latency_matches = re.findall(r'avg latency: (\d+\.\d+) us', content)
-    avg_latencies = [float(lat) for lat in avg_latency_matches]
+    # Check if this is a read operation
+    is_read_workload = "data_read" in content or "search" in content
     
-    p99_latency_matches = re.findall(r'99% latency: (\d+\.\d+) us', content)
+    # For read workload, only look for search latency
+    if is_read_workload:
+        avg_latency_matches = re.findall(r'op: search.*?avg latency: (\d+\.\d+) us', content)
+        p99_latency_matches = re.findall(r'op: search.*?99% latency: (\d+\.\d+) us', content)
+    # For insert/default workload, only look for insert latency
+    else:
+        avg_latency_matches = re.findall(r'op: insert.*?avg latency: (\d+\.\d+) us', content)
+        p99_latency_matches = re.findall(r'op: insert.*?99% latency: (\d+\.\d+) us', content)
+    
+    avg_latencies = [float(lat) for lat in avg_latency_matches]
     p99_latencies = [float(lat) for lat in p99_latency_matches]
     
     avg_latency = sum(avg_latencies) / len(avg_latencies) if avg_latencies else None

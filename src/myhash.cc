@@ -33,33 +33,8 @@ namespace MYHASH
         // 1. Cal Segloc according to Global Depth At local
         Slot *tmp = (Slot *)alloc.alloc(sizeof(Slot));
         uint64_t segloc = get_seg_loc(pattern, dir->global_depth);
-        if (dir->segs[segloc].local_depth != dir->global_depth)
-        {
-            uint64_t ancestor_segloc = segloc;
-            uint64_t current_depth = dir->global_depth;
-            while (current_depth > 0)
-            {
-                // 向上查找一级
-                current_depth--;
-                uint64_t parent_segloc = get_seg_loc(pattern, current_depth);
-                log_test("[%lu:%lu]向上查找一级，当前深度:%lu，当前段%lu, LD:%lu, 根段%lu, LD:%lu", cli_id, coro_id, current_depth, ancestor_segloc, dir->segs[ancestor_segloc].local_depth, parent_segloc, dir->segs[parent_segloc].local_depth);
 
-                // 检查找到的段的LD是否为当前检查的深度
-                if (dir->segs[ancestor_segloc].local_depth == 0) {
-                    log_test("[%lu:%lu]段%lu的LD:%lu不存在，继续向上查找根段%lu, LD:%lu", cli_id, coro_id, ancestor_segloc, dir->segs[ancestor_segloc].local_depth, parent_segloc, dir->segs[parent_segloc].local_depth);
-                    ancestor_segloc = parent_segloc;
-                }
-                else if (dir->segs[ancestor_segloc].local_depth == dir->segs[parent_segloc].local_depth && dir->segs[ancestor_segloc] == dir->segs[parent_segloc]) {
-                    log_test("[%lu:%lu]段%lu的LD:%lu和根段%lu的LD:%lu匹配，并且是同一个段，优先使用根段", cli_id, coro_id, ancestor_segloc, dir->segs[ancestor_segloc].local_depth, parent_segloc, dir->segs[parent_segloc].local_depth);
-                    ancestor_segloc = parent_segloc;
-                } else {
-                    log_test("[%lu:%lu]段%lu的LD:%lu和根段%lu的LD:%lu不是同一个段，使用这个段", cli_id, coro_id, ancestor_segloc, dir->segs[ancestor_segloc].local_depth, parent_segloc, dir->segs[parent_segloc].local_depth);
-                    break;
-                }
-            }
-            segloc = ancestor_segloc;
-        }
-
+        segloc %= (1 << dir->segs[segloc].local_depth);
         uintptr_t segptr = dir->segs[segloc].cur_seg_ptr;
         assert_require(segptr != 0);
 
@@ -159,13 +134,7 @@ namespace MYHASH
         if (remote_split)
         { // 应该大于本地的local_depth就需要更新
             // tmp->print(std::format("[{}:{}:{}]远端分裂了！remote_local_depth:{}>local_depth:{}，本次写入作废！需要重写！segloc:{}，FAA地址:{}", cli_id, coro_id, this->key_num, remote_local_depth, dir->segs[segloc].local_depth, segloc, segptr + sizeof(uint64_t)));
-            co_await check_gd(segloc);
-            // 更新本地的seg_meta
-            auto new_segloc = get_seg_loc(pattern, dir->global_depth);
-            co_await check_gd(new_segloc); // 现在&dir->segs[segloc]是最新的
-            // segptr = dir->segs[segloc].cur_seg_ptr;
-            // TODO: 更新所有指向此Segment的DirEntry
-            // dir->print(std::format("[{}:{}]同步之后", cli_id, coro_id));
+            co_await check_gd(segloc, false, true);
         }
         // check if need split
         if (seg_meta[segloc].slot_cnt == 0)
@@ -360,11 +329,13 @@ namespace MYHASH
                             first_original_seg_loc = cur_seg_loc + offset;
                     }
                     dir->segs[cur_seg_loc].local_depth = local_depth + 1;
+                    // log_err("[%lu:%lu:%lu]segloc:%lu分裂，local_depth:%lu->%lu", cli_id, coro_id, this->key_num, cur_seg_loc, local_depth, local_depth + 1);
                     cur_seg_ptr = seg_rmr.raddr + sizeof(uint64_t) + (cur_seg_loc + offset) * sizeof(DirEntry);
 
                     // Update DirEntry
                     co_await conn->write(cur_seg_ptr, seg_rmr.rkey, &dir->segs[cur_seg_loc + offset], sizeof(DirEntry), lmr->lkey);
 
+                    // log_err("[%lu:%lu:%lu]Segment分裂, first_original_seg_loc:%lu, first_new_seg_loc:%lu, depth:%lu->%lu", cli_id, coro_id, this->key_num, first_original_seg_loc, first_new_seg_loc, local_depth, local_depth + 1);
                     // if (local_depth == dir->global_depth){
                     //     // global
                     //     log_err("[%lu:%lu:%lu]Global SPlit At segloc:%lu depth:%lu to :%lu with new seg_ptr:%lx new_main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr,i & 1 ?new_main_ptr2:new_main_ptr1);

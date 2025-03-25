@@ -193,6 +193,8 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 
 int main(int argc, char *argv[])
 {
+    log_err("Run ser_cli_var_kv instead!!!!");
+    return 0;
     config.ParseArg(argc, argv);
     barrier = std::make_unique<std::barrier<>>(config.num_cli * config.num_coro);
     load_num = config.load_num;

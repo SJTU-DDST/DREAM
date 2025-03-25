@@ -8,9 +8,9 @@ mode=${2:-"run"}  # 可以是 "run", "rerun" 或 "check"
 
 # 配置
 num_cli_list=(1 4 8 16 32 56 112 168 224)
-# hash_types=("Plush" "SEPHASH" "MYHASH" "RACE")
-# num_cli_list=(112)
-hash_types=("SEPHASH")
+hash_types=("Plush" "SEPHASH" "MYHASH" "RACE")
+# num_cli_list=(224)
+# hash_types=("MYHASH")
 experiment_script="../scripts/ser_cli_${experiment_type}.sh"
 default_script="../scripts/ser_cli_insert.sh"
 
