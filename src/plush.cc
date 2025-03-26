@@ -492,6 +492,10 @@ Retry:
     {
         log_err("[%lu:%lu} retry_cnt:%lu", cli_id, coro_id, retry_cnt);
         this->op_key->print(cli_id,coro_id,__LINE__);
+        perf.push_insert();
+        sum_cost.end_insert();
+        sum_cost.push_retry_cnt(retry_cnt);
+        co_return;
     }
     // 1. Cal GroupIdx && BucIdx
     uint64_t group_id = pattern % init_group_num;

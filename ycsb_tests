@@ -1,0 +1,7 @@
+../test.sh ycsb_a run "224" "SEPHASH,MYHASH,RACE"
+../test.sh ycsb_b run "224" "SEPHASH,MYHASH,RACE"
+../test.sh ycsb_c run "224" "SEPHASH,MYHASH,RACE"
+../test.sh ycsb_d run "224" "SEPHASH,MYHASH,RACE"
+
+
+# Plush插入不了1亿KV，改成load 10M

@@ -3,4 +3,5 @@
 /build
 !*space*.txt
 data
+mixed_data
 out

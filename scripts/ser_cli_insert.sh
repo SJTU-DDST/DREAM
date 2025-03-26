@@ -62,7 +62,7 @@ fi
 # YCSB A : read:0.5,insert:0.5 zipfian(2)
 # YCSB B : read:0.95,update:0.05 zipfian(2)
 # YCSB C : read:1.0,update:0.0 zipfian(2)
-# YCSB D : read:0.95,insert:0.5 latest(3)
+# YCSB D : read:0.95,insert:0.05 latest(3)
 # YCSB E : scan--不考虑
 # YCSB F : read:0.5,rmq:0.5 zipfian(2) -- RMW ，不考虑
 

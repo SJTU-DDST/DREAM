@@ -1,16 +1,37 @@
 #!/bin/bash
-# filepath: /home/congyong/SepHash/run_experiment.sh
+# filepath: /home/congyong/SepHash/test.sh
 # Should be run in the build directory
+# 指定哈希类型（只测试特定哈希算法）：./test.sh insert run "" "MYHASH,SEPHASH"
+# 同时指定线程数和哈希类型：./test.sh insert run "1,8,32" "MYHASH,SEPHASH"
 
 # 默认参数
 experiment_type=${1:-"insert"}
 mode=${2:-"run"}  # 可以是 "run", "rerun" 或 "check"
 
-# 配置
-num_cli_list=(1 4 8 16 32 56 112 168 224)
-hash_types=("Plush" "SEPHASH" "MYHASH" "RACE")
-# num_cli_list=(224)
-# hash_types=("MYHASH")
+# 解析可选的线程数列表参数（第三个参数）
+if [ -n "$3" ]; then
+    # 将逗号分隔的列表转换为数组
+    IFS=',' read -r -a num_cli_list <<< "$3"
+else
+    # 使用默认值
+    num_cli_list=(1 4 8 16 32 56 112 168 224)
+fi
+
+# 解析可选的哈希类型列表参数（第四个参数）
+if [ -n "$4" ]; then
+    # 将逗号分隔的列表转换为数组
+    IFS=',' read -r -a hash_types <<< "$4"
+else
+    # 使用默认值
+    hash_types=("Plush" "SEPHASH" "MYHASH" "RACE")
+fi
+
+# 显示运行参数
+echo "运行实验: $experiment_type"
+echo "运行模式: $mode"
+echo "线程数列表: ${num_cli_list[*]}"
+echo "哈希类型列表: ${hash_types[*]}"
+
 experiment_script="../scripts/ser_cli_${experiment_type}.sh"
 default_script="../scripts/ser_cli_insert.sh"
 
@@ -19,8 +40,12 @@ set_hash_type() {
     local hash_type=$1
     local common_h_path="../include/common.h"
     
-    # 备份原文件
-    # cp "$common_h_path" "${common_h_path}.bak"
+    # 如果哈希类型包含连字符"-"，只保留连字符前的部分
+    if [[ "$hash_type" == *"-"* ]]; then
+        local base_type=${hash_type%%-*}
+        echo "原始哈希类型 ${hash_type} 包含连字符，将使用基础类型: ${base_type}"
+        hash_type=$base_type
+    fi
     
     # 完全替换HASH_TYPE的整行定义，避免部分匹配问题
     sed -i "s/^#define HASH_TYPE .*/#define HASH_TYPE ${hash_type}/" "$common_h_path"
@@ -42,6 +67,32 @@ reset_hash_type() {
     set_hash_type "MYHASH"
 }
 
+# 新增函数：控制 ALLOW_KEY_OVERLAP 定义
+toggle_key_overlap() {
+    local action=$1  # "disable" 或 "enable"
+    local var_kv_path="../test/ser_cli_var_kv.cc"
+    
+    if [ "$action" == "disable" ]; then
+        # 注释掉 ALLOW_KEY_OVERLAP 定义
+        sed -i 's/^#define ALLOW_KEY_OVERLAP/\/\/#define ALLOW_KEY_OVERLAP/' "$var_kv_path"
+        echo "已禁用 ALLOW_KEY_OVERLAP"
+    else
+        # 恢复 ALLOW_KEY_OVERLAP 定义
+        sed -i 's/^\/\/#define ALLOW_KEY_OVERLAP/#define ALLOW_KEY_OVERLAP/' "$var_kv_path"
+        echo "已恢复 ALLOW_KEY_OVERLAP"
+    fi
+}
+
+# 函数：检查当前哈希类型是否包含"Partitioned"
+is_partitioned_hash() {
+    local hash_type=$1
+    if [[ "$hash_type" == *"Partitioned"* ]]; then
+        return 0  # 包含"Partitioned"
+    else
+        return 1  # 不包含"Partitioned"
+    fi
+}
+
 # 函数：设置fp碰撞模式
 # 如果是insert实验，和RACE保持一致，设置 READ_FULL_KEY_ON_FP_COLLISION 为 0，即默认插入的键不重复，不读取完整键。
 # 后续可以在Slot中加入是否为insert条目的标记，以便在合并时跳过完整键的读取。
@@ -61,7 +112,7 @@ set_fp_collision_mode() {
 }
 
 # 如果实验类型包含"insert"且不是check模式，设置fp碰撞模式为false
-if [[ "$experiment_type" == *"insert"* ]] && [ "$mode" != "check" ]; then
+if [ "$experiment_type" = "insert" ] && [ "$mode" != "check" ]; then
     set_fp_collision_mode false
 else
     set_fp_collision_mode true
@@ -74,6 +125,13 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
     
     for hash_type in "${hash_types[@]}"; do
         set_hash_type "$hash_type"
+        
+        # 根据哈希类型决定是否禁用key overlap
+        if is_partitioned_hash "$hash_type"; then
+            toggle_key_overlap "disable"
+        else
+            toggle_key_overlap "enable"
+        fi
         
         for num_cli in "${num_cli_list[@]}"; do
             base_dir="data_${experiment_type}/${hash_type}/${num_cli}"
@@ -151,6 +209,9 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
         reset_hash_type
     done
     
+    # 确保最后恢复ALLOW_KEY_OVERLAP
+    toggle_key_overlap "enable"
+    
     if [ "$mode" == "check" ]; then
         echo "检查完成：总共有 ${need_rerun_count} 个实验需要重新运行"
         
@@ -161,9 +222,9 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
         cp "$default_script" "../ser_cli.sh"
         
         # 如果实验类型包含"insert"，恢复fp碰撞模式为true
-        if [[ "$experiment_type" == *"insert"* ]]; then
-            set_fp_collision_mode true
-        fi
+        # if [[ "$experiment_type" == *"insert"* ]]; then
+        #     set_fp_collision_mode true
+        # fi
         
         exit 0
     fi
@@ -173,6 +234,13 @@ fi
 for hash_type in "${hash_types[@]}"; do
     base_dir="data_${experiment_type}/${hash_type}"
     set_hash_type "$hash_type"
+    
+    # 根据哈希类型决定是否禁用key overlap
+    if is_partitioned_hash "$hash_type"; then
+        toggle_key_overlap "disable"
+    else
+        toggle_key_overlap "enable"
+    fi
     
     # 确保目标目录存在
     mkdir -p "$base_dir"
@@ -229,13 +297,13 @@ for hash_type in "${hash_types[@]}"; do
     reset_hash_type
 done
 
+# 确保最后恢复ALLOW_KEY_OVERLAP
+toggle_key_overlap "enable"
+
 # 实验结束后恢复默认脚本
 if [ -f "../ser_cli.sh" ]; then
     rm "../ser_cli.sh"
 fi
 cp "$default_script" "../ser_cli.sh"
 
-# 如果实验类型包含"insert"，恢复fp碰撞模式为true
-if [[ "$experiment_type" == *"insert"* ]]; then
-    set_fp_collision_mode true
-fi
+set_fp_collision_mode true

@@ -20,7 +20,8 @@
 #include <barrier>
 #define ORDERED_INSERT
 #define ALLOW_KEY_OVERLAP
-#define FIXED_LOAD_SETUP
+// #define FIXED_LOAD_SETUP
+#define ONLY_FIRST_CORO_START
 Config config;
 uint64_t load_num;
 
@@ -49,17 +50,15 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
-    // All threads arrive at barrier before any starts
     barrier->arrive_and_wait();
-    
-    // Only first coroutine in each machine calls start
-    if (cli_id == 0 && coro_id == 0) {
+#ifdef ONLY_FIRST_CORO_START
+    if (cli_id == 0 && coro_id == 0)
         co_await cli->start(config.num_machine);
-    }
-    
-    // Make sure start completes before any thread proceeds
     barrier->arrive_and_wait();
-    
+#else
+    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+#endif
+
     uint64_t tmp_key[key_len];
     Slice key, value;
     std::string tmp_value = std::string(value_len, '1');
@@ -78,8 +77,8 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
     if (config.machine_id == 0 && coro_id == 0 && cli_id < fixed_num_cli) {
         for (uint64_t i = 0; i < num_op; i++)
         {
-            // if (i % 100000 == 0)
-            //     log_err("cli_id:%lu coro_id:%lu Load Progress: %lu/%lu", cli_id, coro_id, i, num_op);
+            if (i % 100000 == 0)
+                log_err("cli_id:%lu coro_id:%lu Load Progress: %lu/%lu", cli_id, coro_id, i, num_op);
             GenKey((cli_id * fixed_num_coro) * num_op + i, tmp_key);
             co_await cli->insert(&key, &value);
         }
@@ -87,9 +86,13 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 #else
     // Original version
     uint64_t num_op = load_num / (config.num_machine * config.num_cli * config.num_coro);
+    Generator *gen = new seq_gen(num_op);
+    xoshiro256pp key_chooser;
     for (uint64_t i = 0; i < num_op; i++)
     {
-        GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + i,
+        if (i % 100000 == 0)
+            log_err("cli_id:%lu coro_id:%lu Load Progress: %lu/%lu", cli_id, coro_id, i, num_op);
+        GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + gen->operator()(key_chooser()),
                tmp_key);
         co_await cli->insert(&key, &value);
     }
@@ -97,7 +100,8 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 
     // All threads wait at barrier before stopping
     barrier->arrive_and_wait();
-    
+
+#ifdef ONLY_FIRST_CORO_START
     // Only first coroutine in each machine calls stop
     if (cli_id == 0 && coro_id == 0) {
         co_await cli->stop();
@@ -105,6 +109,9 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
     
     // Wait for stop to complete before any thread returns
     barrier->arrive_and_wait();
+#else
+    co_await cli->stop();
+#endif
     
     co_return;
 }
@@ -113,17 +120,14 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
-    // All threads arrive at barrier before any starts
     barrier->arrive_and_wait();
-
-    // Only first coroutine in each machine calls start
+#ifdef ONLY_FIRST_CORO_START
     if (cli_id == 0 && coro_id == 0)
-    {
         co_await cli->start(config.num_machine);
-    }
-
-    // Make sure start completes before any thread proceeds
     barrier->arrive_and_wait();
+#else
+    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+#endif
     uint64_t tmp_key[key_len];
     char buffer[8192];
     Slice key, value, ret_value, update_value;
@@ -147,12 +151,12 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
     xoshiro256pp op_chooser;
     xoshiro256pp key_chooser;
     uint64_t num_op = config.num_op / (config.num_machine * config.num_cli * config.num_coro);
-    uint64_t load_avr = load_num / (config.num_machine * config.num_cli * config.num_coro);
-    // uint64_t load_avr = num_op;
+    // uint64_t load_avr = load_num / (config.num_machine * config.num_cli * config.num_coro); // if load_num == 0, load_avr == 0, causing key overlap, and key range is [0, op_per_coro]
+    uint64_t load_avr = num_op; // this is correct, key cannot overlap, key range is [coros * num_op, (coros + 1) * num_op]
     for (uint64_t i = 0; i < num_op; i++)
     {
-        // if (i % 100000 == 0)
-        //     log_err("cli_id:%lu coro_id:%lu Run Progress: %lu/%lu", cli_id, coro_id, i, num_op);
+        if (i % 100000 == 0)
+            log_err("cli_id:%lu coro_id:%lu Run Progress: %lu/%lu", cli_id, coro_id, i, num_op);
         op_frac = op_chooser();
         if (op_frac < config.insert_frac)
         {
@@ -164,6 +168,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
                            load_avr +
                        gen->operator()(key_chooser()),
                    tmp_key);
+                //    log_err("cli_id:%lu coro_id:%lu insert key:%lu", cli_id, coro_id, tmp_key[0]);
 #endif
             co_await cli->insert(&key, &value);
         }
@@ -237,7 +242,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
     }
     // All threads wait at barrier before stopping
     barrier->arrive_and_wait();
-
+#ifdef ONLY_FIRST_CORO_START
     // Only first coroutine in each machine calls stop
     if (cli_id == 0 && coro_id == 0)
     {
@@ -246,6 +251,9 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 
     // Wait for stop to complete before any thread returns
     barrier->arrive_and_wait();
+#else
+    co_await cli->stop();
+#endif
     co_return;
 }
 
