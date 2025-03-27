@@ -38,7 +38,7 @@ def parse_txt_file(file_path):
     return iops, avg_latency, p99_latency
 
 def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data, data_dir):
-    fig, axs = plt.subplots(1, 3, figsize=(10, 3))
+    fig, axs = plt.subplots(1, 3, figsize=(10, 3), layout='constrained')
     
     # 获取所有线程数，以便统一横坐标
     all_threads = set()
@@ -79,7 +79,7 @@ def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data, data_dir):
     axs[0].set_xlabel('Number of Threads')
     axs[0].set_ylabel('IOPS (Kops)')
     axs[0].set_title('IOPS')
-    axs[0].legend()
+    # axs[0].legend()
     axs[0].grid(True)
     
     axs[1].set_xlabel('Number of Threads')
@@ -88,18 +88,22 @@ def plot_data_subplots(iops_data, avg_latency_data, p99_latency_data, data_dir):
     axs[1].set_title('Average Latency')
     axs[1].set_yscale('log')  # 使用对数坐标轴
     # axs[1].set_ylim(0, 500)
-    axs[1].legend()
+    # axs[1].legend()
     axs[1].grid(True)
     
     axs[2].set_xlabel('Number of Threads')
     axs[2].set_ylabel('Latency (us, log scale)')
     axs[2].set_title('99% Latency')
     axs[2].set_yscale('log')  # 使用对数坐标轴
-    axs[2].legend()
+    # axs[2].legend()
     axs[2].grid(True)
+
+    handles, labels = axs[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc=9, bbox_to_anchor=(0.5, 1.15), ncol=5, frameon=False)
     
-    plt.tight_layout()
-    plt.savefig(f'../out/{data_dir}.png')
+    # plt.tight_layout()
+    plt.savefig(f'../out_png/{data_dir}.png', bbox_inches='tight')
+    plt.savefig(f'../out_pdf/{data_dir}.pdf', bbox_inches='tight')
 
 def main(data_root_dir):
     data_dirs = [d for d in os.listdir(data_root_dir) if os.path.isdir(os.path.join(data_root_dir, d))]

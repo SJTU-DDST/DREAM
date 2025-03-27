@@ -4,4 +4,4 @@
 ../test.sh ycsb_d run "224" "SEPHASH,MYHASH,RACE"
 
 
-# Plush插入不了1亿KV，改成load 10M
+# Plush插入不了1亿KV，改成load 10M（现在可能可以了）
