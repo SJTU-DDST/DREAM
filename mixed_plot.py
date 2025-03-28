@@ -4,6 +4,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
+hat = ['//', '\\\\', 'xx', '||', '--', '++']
+markers = ['H', '^', '>', 'D', 'o', 's', 'p', 'x']
+c = np.array([[102, 194, 165], [252, 141, 98], [141, 160, 203], 
+        [231, 138, 195], [166,216,84], [255, 217, 47],
+        [229, 196, 148], [179, 179, 179]])
+c  = c/255
+def hash_type_to_label(hash_type):
+    if hash_type == 'MYHASH':
+        return 'DREAM'
+    elif hash_type == 'SEPHASH':
+        return 'SepHash'
+    else:
+        return hash_type
+
 # 定义数据目录
 DATA_DIR = "../mixed_data"
 
@@ -41,8 +55,7 @@ def get_iops_data(ratio_dir, hash_type):
     
     return iops_values
 
-# 主函数
-def main():
+def plot_mixed(ax):
     # 收集数据
     data = {}
     ratio_dirs = sorted(get_ratio_dirs())
@@ -57,9 +70,9 @@ def main():
     for ratio_dir in ratio_dirs:
         ratio_match = re.match(r'data_insert(\d+)_read(\d+)', ratio_dir)
         if ratio_match:
-            insert_ratio = int(ratio_match.group(1))
-            read_ratio = int(ratio_match.group(2))
-            ratio_label = f"{insert_ratio}% Insert\n{read_ratio}% Read"
+            insert_ratio = int(ratio_match.group(1)) // 10
+            read_ratio = int(ratio_match.group(2)) // 10
+            ratio_label = f"{insert_ratio}:{read_ratio}"
             
             data[ratio_label] = {}
             
@@ -69,20 +82,10 @@ def main():
                     avg_iops = np.mean(iops_values)
                     data[ratio_label][hash_type] = avg_iops
     
-    # 配置图表
-    fig, ax = plt.subplots(figsize=(12, 8))
-    
     # 设置柱状图参数
     bar_width = 0.3
     opacity = 1.0
     index = np.arange(len(data.keys()))
-    
-    # 定义色彩、纹理和边框样式
-    hat = ['//', '\\\\', 'xx', '||', '--', '++']
-    c = np.array([
-        [102, 194, 165], [252, 141, 98], [141, 160, 203], 
-        [231, 138, 195], [166, 216, 84], [255, 217, 47]
-    ]) / 255
     
     # 设置网格线在柱子下方
     ax.set_axisbelow(True)
@@ -94,19 +97,20 @@ def main():
             values.append(data[ratio_label].get(hash_type, 0))
         
         position = index + i * bar_width
-        plt.bar(position, values, bar_width,
-                color=c[i % len(c)],
-                edgecolor='black',
-                lw=1.2,
-                hatch=hat[i % len(hat)],
-                label=hash_type)
+        ax.bar(position, values, bar_width,
+               color=c[i % len(c)],
+               edgecolor='black',
+               lw=1.2,
+               hatch=hat[i % len(hat)],
+               label=hash_type_to_label(hash_type))
     
     # 设置图表属性
-    plt.xlabel('Insert/Read Ratio', fontsize=14)
-    plt.ylabel('IOPS (K ops/sec)', fontsize=14)
-    plt.title('IOPS Performance Comparison: SepHash vs MyHash (224 Threads)', fontsize=16)
-    plt.xticks(index + bar_width * (len(all_hash_types) - 1) / 2, data.keys(), rotation=0)
-    plt.legend(title='Hash Type', loc='upper center', bbox_to_anchor=(0.5, -0.05), ncol=len(all_hash_types), frameon=False)
+    ax.set_xlabel('Insert/Search Ratio')
+    ax.set_ylabel('Throughput (Kops)')
+    ax.set_title('Hybrid Workloads')
+    ax.set_xticks(index + bar_width * (len(all_hash_types) - 1) / 2)
+    ax.set_xticklabels(data.keys(), rotation=0)
+    # ax.legend(title='Hash Type', loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=2)
     
     # 优化Y轴刻度显示
     def thousands_formatter(x, pos):
@@ -115,17 +119,54 @@ def main():
     ax.yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
     
     # 添加网格线以便于读取数据
-    plt.grid(axis='y', linestyle='-.', alpha=0.7)
+    ax.grid(axis='y', linestyle='-.')
+
+def plot_ycsb(ax):
+    ax.text(0.5, 0.5, 'YCSB Benchmarks\n(WIP)', 
+            horizontalalignment='center', verticalalignment='center', 
+            transform=ax.transAxes)
+    ax.set_title('YCSB Benchmarks')
+    # 添加占位符，后续实现具体绘图逻辑
+
+def plot_variable_kv(ax):
+    ax.text(0.5, 0.5, 'Variable Length KV\n(WIP)', 
+            horizontalalignment='center', verticalalignment='center', 
+            transform=ax.transAxes)
+    ax.set_title('Variable KV Size')
+    # 添加占位符，后续实现具体绘图逻辑
+
+def plot_decomposition(ax):
+    ax.text(0.5, 0.5, 'Decomposition\n(WIP)', 
+            horizontalalignment='center', verticalalignment='center', 
+            transform=ax.transAxes)
+    ax.set_title('Performance Decomposition')
+    # 添加占位符，后续实现具体绘图逻辑
+
+if __name__ == "__main__":
+    # 创建 1x4 子图布局
+    fig, axs = plt.subplots(1, 4, figsize=(10, 2.5))
     
-    # 调整布局
-    plt.tight_layout(rect=[0, 0.05, 1, 0.95])
+    # Fig 1: Mixed Workload
+    plot_mixed(axs[0])
+    
+    # Fig 2: YCSB
+    plot_ycsb(axs[1])
+    
+    # Fig 3: 变长KV
+    plot_variable_kv(axs[2])
+    
+    # Fig 4: 分解
+    plot_decomposition(axs[3])
+
+    handles, labels = axs[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=4, frameon=False)
+    
+    # 调整整体布局
+    plt.tight_layout()
     
     # 保存图片
-    plt.savefig('../out/mixed.png', dpi=300, bbox_inches='tight')
-    plt.savefig('../out/mixed.eps', bbox_inches='tight')  # 同时保存EPS格式
+    plt.savefig('../out_png/misc.png', bbox_inches='tight')
+    plt.savefig('../out_pdf/misc.pdf', bbox_inches='tight')
     
     # 显示图表
     plt.show()
-
-if __name__ == "__main__":
-    main()

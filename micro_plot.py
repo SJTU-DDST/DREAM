@@ -73,13 +73,13 @@ def plot_combined_data(data_sets):
     # Column titles for each dataset
     dataset_titles = {
         'data_insert': 'Insert',
-        'data_update': 'Update',
-        'data_update_zipf99': 'Update (Zipf 0.99)',
+        'data_update': 'Update (Uniform)',
+        'data_update_zipf99': 'Update (Zipf θ=0.99)',
         'data_read': 'Read'
     }
     
     # Row titles
-    row_titles = ['IOPS (Kops)', 'Average Latency (us)', '99% Latency (us)']
+    row_titles = ['Throughput (Kops)', 'Average Latency (us)', '99% Latency (us)']
     
     # 确保列按照指定顺序排列
     ordered_data_dirs = ['data_insert', 'data_update', 'data_update_zipf99', 'data_read']
@@ -186,6 +186,101 @@ def plot_combined_data(data_sets):
     plt.savefig(f'../out_png/micro.png', bbox_inches='tight')
     plt.savefig(f'../out_pdf/micro.pdf', bbox_inches='tight')
 
+def calculate_relative_performance(data_sets):
+    """
+    计算并打印MYHASH的性能相对于其他哈希类型的比值
+    """
+    print("\n=== DREAM (MYHASH) 相对性能比较 ===")
+    
+    ordered_data_dirs = ['data_insert', 'data_update', 'data_update_zipf99', 'data_read']
+    metric_names = {
+        'iops': "吞吐量(IOPS)",
+        'avg_latency': "平均延迟", 
+        'p99_latency': "P99延迟"
+    }
+    
+    for data_dir in ordered_data_dirs:
+        if data_dir not in data_sets:
+            continue
+            
+        print(f"\n== {data_dir} 工作负载 ==")
+        
+        iops_data, avg_latency_data, p99_latency_data = data_sets[data_dir]
+        
+        # 检查是否有MYHASH数据
+        if 'MYHASH' not in iops_data:
+            print(f"  没有找到MYHASH数据")
+            continue
+        
+        # 为每种类型的数据进行比较
+        for metric_key, metric_label in metric_names.items():
+            print(f"\n-- {metric_label} --")
+            
+            # 选择对应的数据集
+            if metric_key == 'iops':
+                data_dict = iops_data
+                metric_field = 'iops'
+                better_is_higher = True  # IOPS越高越好
+            elif metric_key == 'avg_latency':
+                data_dict = avg_latency_data
+                metric_field = 'avg_latency'
+                better_is_higher = False  # 延迟越低越好
+            else:  # p99_latency
+                data_dict = p99_latency_data
+                metric_field = 'p99_latency'
+                better_is_higher = False  # 延迟越低越好
+            
+            # 获取其他哈希类型
+            other_hash_types = [ht for ht in data_dict.keys() if ht != 'MYHASH']
+            
+            if not other_hash_types:
+                print(f"  没有找到其他哈希类型进行比较")
+                continue
+            
+            # 对每种哈希类型计算相对性能
+            for other_hash in other_hash_types:
+                # 获取所有共有的线程数
+                common_threads = set(data_dict['MYHASH'].keys()) & set(data_dict[other_hash].keys())
+                
+                if not common_threads:
+                    print(f"  DREAM与{hash_type_to_label(other_hash)}没有共同的线程数")
+                    continue
+                
+                # 计算每个线程数上的性能比值
+                ratios = []
+                single_thread_ratio = None
+                
+                for thread in sorted(common_threads):
+                    myhash_value = data_dict['MYHASH'][thread][metric_field]
+                    other_value = data_dict[other_hash][thread][metric_field]
+                    
+                    if myhash_value is None or other_value is None or other_value == 0:
+                        continue
+                    
+                    # 计算比值，考虑指标的方向（越高越好还是越低越好）
+                    ratio = (myhash_value / other_value - 1) * 100  # 转换为百分比
+                    
+                    ratios.append(ratio)
+                    
+                    # 记录1线程的性能比值
+                    if thread == 1:
+                        single_thread_ratio = ratio
+                
+                if ratios:
+                    min_ratio = min(ratios)
+                    max_ratio = max(ratios)
+                    avg_ratio = sum(ratios) / len(ratios)
+                    
+                    comparison = "高于" if avg_ratio > 0 else "低于"
+                    print(f"  与{hash_type_to_label(other_hash)}相比: {min_ratio:.1f}% 到 {max_ratio:.1f}% {comparison}，平均 {avg_ratio:.1f}%", end="")
+                    
+                    # 如果有1线程的数据，额外输出
+                    if single_thread_ratio is not None:
+                        single_thread_comparison = "高于" if single_thread_ratio > 0 else "低于"
+                        print(f"，单线程时 {single_thread_ratio:.1f}% {single_thread_comparison}")
+                    else:
+                        print()  # 换行
+
 def main(data_root_dir):
     # 我们只关心这四个数据集
     target_data_dirs = ['data_insert', 'data_update', 'data_update_zipf99', 'data_read']
@@ -247,6 +342,9 @@ def main(data_root_dir):
     
     # 绘制组合图
     plot_combined_data(all_data_sets)
+    
+    # 计算并打印MYHASH的相对性能
+    calculate_relative_performance(all_data_sets)
 
 if __name__ == '__main__':
     main('../data')
