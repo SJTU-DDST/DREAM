@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 # SET(CMAKE_CXX_COMPILER "/usr/bin/g++")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath=/usr/local/gcc-14.2.0/lib64")
 project(MyIndex)
 set(CMAKE_CXX_FLAGS "-O3") # -march=native
 # set(CMAKE_CXX_FLAGS "-g -O0") # -march=native

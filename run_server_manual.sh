@@ -1,2 +1,2 @@
 # clear; cd /home/congyong/SepHash/build && make ser_cli -j112 && rsync -avz ~/SepHash congyong@192.168.98.74:~/ && ./ser_cli --server --gid_idx 1 --max_coro 256 --cq_size 64 --mem_size 91268055040
-./ser_cli --server --gid_idx 1 --max_coro 256 --cq_size 64 --mem_size 91268055040
+./ser_cli_var_kv --server --gid_idx 1 --max_coro 256 --cq_size 64 --mem_size 91268055040
