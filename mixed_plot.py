@@ -18,6 +18,12 @@ def hash_type_to_label(hash_type):
     else:
         return hash_type
 
+# 定义哈希类型的顺序
+def sort_hash_types(hash_types):
+    # 指定的顺序: RACE, RACE-Partitioned, Plush, SepHash, MYHASH
+    order = {"RACE": 1, "RACE-Partitioned": 2, "Plush": 3, "SEPHASH": 4, "MYHASH": 5}
+    return sorted(hash_types, key=lambda x: order.get(x, 999))  # 未指定的类型放在最后
+
 # 定义数据目录
 DATA_DIR = "../mixed_data"
 
@@ -65,7 +71,8 @@ def plot_mixed(ax):
         hash_types = get_hash_types(ratio_dir)
         all_hash_types.update(hash_types)
     
-    all_hash_types = sorted(list(all_hash_types))
+    # 使用自定义顺序排序哈希类型，而不是字母顺序
+    all_hash_types = sort_hash_types(list(all_hash_types))
     
     for ratio_dir in ratio_dirs:
         ratio_match = re.match(r'data_insert(\d+)_read(\d+)', ratio_dir)
@@ -83,12 +90,16 @@ def plot_mixed(ax):
                     data[ratio_label][hash_type] = avg_iops
     
     # 设置柱状图参数
-    bar_width = 0.3
+    n_hash_types = len(all_hash_types)
+    bar_width = 0.2  # Make bars narrower
     opacity = 1.0
     index = np.arange(len(data.keys()))
     
     # 设置网格线在柱子下方
     ax.set_axisbelow(True)
+    
+    # 计算每组柱状图的偏移量，使它们并排显示而不重叠
+    offsets = np.linspace(-(n_hash_types-1)*bar_width/2, (n_hash_types-1)*bar_width/2, n_hash_types)
     
     # 绘制柱状图
     for i, hash_type in enumerate(all_hash_types):
@@ -96,7 +107,7 @@ def plot_mixed(ax):
         for ratio_label in data.keys():
             values.append(data[ratio_label].get(hash_type, 0))
         
-        position = index + i * bar_width
+        position = index + offsets[i]  # Apply offset for each hash type
         ax.bar(position, values, bar_width,
                color=c[i % len(c)],
                edgecolor='black',
@@ -108,9 +119,8 @@ def plot_mixed(ax):
     ax.set_xlabel('Insert/Search Ratio')
     ax.set_ylabel('Throughput (Kops)')
     ax.set_title('Hybrid Workloads')
-    ax.set_xticks(index + bar_width * (len(all_hash_types) - 1) / 2)
+    ax.set_xticks(index)
     ax.set_xticklabels(data.keys(), rotation=0)
-    # ax.legend(title='Hash Type', loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=2)
     
     # 优化Y轴刻度显示
     def thousands_formatter(x, pos):

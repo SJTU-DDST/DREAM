@@ -488,10 +488,10 @@ task<> Client::insert(Slice *key, Slice *value)
 Retry:
     retry_cnt++;
     alloc.ReSet(sizeof(FilterCache) + kvblock_len);
-    if (retry_cnt > 100000 && (retry_cnt % 100000 == 0))
+    if (retry_cnt > 1000)
     {
-        log_err("[%lu:%lu} retry_cnt:%lu", cli_id, coro_id, retry_cnt);
-        this->op_key->print(cli_id,coro_id,__LINE__);
+        // log_err("[%lu:%lu} retry_cnt:%lu", cli_id, coro_id, retry_cnt);
+        // this->op_key->print(cli_id,coro_id,__LINE__);
         perf.push_insert();
         sum_cost.end_insert();
         sum_cost.push_retry_cnt(retry_cnt);
@@ -1164,8 +1164,8 @@ Retry:
         co_return true;
     }
 
-    log_err("[%lu:%lu]No mathc key", this->cli_id, this->coro_id);
-    this->op_key->print(this->cli_id, this->coro_id, __LINE__);
+    // log_err("[%lu:%lu]No mathc key", this->cli_id, this->coro_id);
+    // this->op_key->print(this->cli_id, this->coro_id, __LINE__);
     // exit(-1);
     perf.push_search();
     co_return false;
