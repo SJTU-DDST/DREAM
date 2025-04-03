@@ -15,6 +15,7 @@
 #include <set>
 #include <stdint.h>
 #define ORDERED_INSERT
+#define ALLOW_KEY_OVERLAP
 Config config;
 uint64_t load_num;
 using ClientType = SEPHASH::Client;
@@ -22,7 +23,7 @@ using ServerType = SEPHASH::Server;
 using Slice = SEPHASH::Slice;
 
 constexpr uint64_t key_len = 2;
-constexpr uint64_t value_len = 4096;
+constexpr uint64_t value_len = 32;
 
 void GenKey(uint64_t key, uint64_t *tmp_key)
 {
@@ -94,20 +95,28 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         op_frac = op_chooser();
         if (op_frac < config.insert_frac)
         {
+#ifdef ALLOW_KEY_OVERLAP
+            GenKey(gen->operator()(key_chooser()), tmp_key);
+#else
             GenKey(load_num +
                        (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
                        gen->operator()(key_chooser()),
                    tmp_key);
+#endif
             co_await cli->insert(&key, &value);
         }
         else if (op_frac < read_frac)
         {
             ret_value.len = 0;
+#ifdef ALLOW_KEY_OVERLAP
+            GenKey(gen->operator()(key_chooser()), tmp_key);
+#else
             GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
                        gen->operator()(key_chooser()),
                    tmp_key);
+#endif
             co_await cli->search(&key, &ret_value);
             // if (ret_value.len != value.len || memcmp(ret_value.data, value.data, value.len) != 0)
             // {
@@ -119,10 +128,14 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         else if (op_frac < update_frac)
         {
             // update
+#ifdef ALLOW_KEY_OVERLAP
+            GenKey(gen->operator()(key_chooser()), tmp_key);
+#else
             GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
                        gen->operator()(key_chooser()),
                    tmp_key);
+#endif
             co_await cli->update(&key, &update_value);
             // auto [slot_ptr, slot] = co_await cli->search(&key, &ret_value);
             // if (slot_ptr == 0ull)
@@ -137,10 +150,14 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
         else
         {
             // delete
+#ifdef ALLOW_KEY_OVERLAP
+            GenKey(gen->operator()(key_chooser()), tmp_key);
+#else
             GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
                        gen->operator()(key_chooser()),
                    tmp_key);
+#endif
             co_await cli->remove(&key);
             // uint64_t cnt = 0;
             // while(true){
@@ -254,7 +271,11 @@ int main(int argc, char *argv[])
         // ths[config.num_cli].join();
 
         printf("Run start\n");
+        #ifdef ALLOW_KEY_OVERLAP
+        auto op_per_coro = config.num_op;
+        #else
         auto op_per_coro = config.num_op / (config.num_machine * config.num_cli * config.num_coro);
+        #endif
         std::vector<Generator *> gens;
         for (uint64_t i = 0; i < config.num_cli * config.num_coro; i++)
         {
@@ -307,24 +328,24 @@ int main(int argc, char *argv[])
         }
         if (config.machine_id != 0 && rehash_flag)
         {
-            rdma_clis[config.num_cli] =
-                new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
-            rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
+            // rdma_clis[config.num_cli] =
+            //     new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
+            // rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
+            // rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
 
-            lmrs[config.num_cli * config.num_coro] =
-                dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
-            ClientType *check_cli = new ClientType(
-                config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
-                rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
+            // lmrs[config.num_cli * config.num_coro] =
+            //     dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
+            // ClientType *check_cli = new ClientType(
+            //     config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
+            //     rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
 
-            auto th = [&](rdma_client *rdma_cli) {
-                // while(rdma_cli->run(check_cli->check_exit())){
-                // log_err("waiting for rehash exit");
-                // }
-            };
-            ths[config.num_cli] = std::thread(th, rdma_clis[config.num_cli]);
-            ths[config.num_cli].join();
+            // auto th = [&](rdma_client *rdma_cli) {
+            //     // while(rdma_cli->run(check_cli->check_exit())){
+            //     // log_err("waiting for rehash exit");
+            //     // }
+            // };
+            // ths[config.num_cli] = std::thread(th, rdma_clis[config.num_cli]);
+            // ths[config.num_cli].join();
         }
 
         if (config.machine_id == 0)
