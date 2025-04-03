@@ -511,7 +511,7 @@ Retry:
     *lock = 0;
     if (!co_await conn->cas(group_ptr, seg_rmr.rkey, *lock, 1))
     {
-        if (retry_cnt > 100000 && (retry_cnt % 100000 == 0))
+        if (retry_cnt > 1000)
         {
             log_err("[%lu:%lu]fail to lock group:%lu at first level with ret_value:%lu", this->cli_id, this->coro_id, group_id,*lock);
             if(lock[0]==0){
@@ -539,7 +539,7 @@ Retry:
             log_err("fail to unlock group:%lu at first level with ret_value:%lu", group_id,*lock);
             exit(-1);
         }
-        if (retry_cnt > 100000 && (retry_cnt % 100000 == 0))
+        if (retry_cnt > 1000)
         {
             log_err("[%lu:%lu]migrate_top group:%lu at first level", this->cli_id, this->coro_id, group_id);
             this->op_key->print(cli_id,coro_id,__LINE__);
@@ -691,10 +691,10 @@ task<> Client::rehash(Bucket *buc, uint64_t size, uint64_t old_level, Slice *key
 
     for (uint64_t key_id = 0; key_id < size; key_id++)
     {
-        if (buc->entrys[key_id].offset == 0)
+        if (buc->entrys[key_id].offset == 0 || !is_valid_ptr(ralloc.ptr(buc->entrys[key_id].offset)))
         {
-            log_err("[%lu:%lu] empty entry during rehash", this->cli_id, this->coro_id);
-            this->op_key->print(this->cli_id, this->coro_id, __LINE__);
+            // log_err("[%lu:%lu] empty entry during rehash", this->cli_id, this->coro_id);
+            // this->op_key->print(this->cli_id, this->coro_id, __LINE__);
             continue;
         }
         // a. read key

@@ -273,8 +273,15 @@ namespace MYHASH
 
             // 4.2 Update new-main-ptr for DirEntries // IMPORTANT: 远端申请新的CurSeg和MainSeg
             uintptr_t new_cur_ptr = ralloc.alloc(sizeof(CurSeg), true);
+#if REUSE_MAIN_SEG
+            uintptr_t new_main_ptr1 = dir->segs[seg_loc].main_seg_ptr;
+            if (new_main_ptr1 == 0)
+                new_main_ptr1 = ralloc.alloc(sizeof(MainSeg), true);
+            uintptr_t new_main_ptr2 = ralloc.alloc(sizeof(MainSeg), true);
+#else
             uintptr_t new_main_ptr1 = ralloc.alloc(sizeof(Slot) * off1);
             uintptr_t new_main_ptr2 = ralloc.alloc(sizeof(Slot) * off2);
+#endif
 
             // a. 同步远端global depth, 确认split类型
             co_await check_gd();
@@ -397,7 +404,13 @@ namespace MYHASH
         // 5.1 Write New MainSeg to Remote && Update CurSegMeta
         // a. write main segment
 
+#if REUSE_MAIN_SEG
+        uintptr_t new_main_ptr = dir->segs[seg_loc].main_seg_ptr;
+        if (new_main_ptr == 0)
+            new_main_ptr = ralloc.alloc(sizeof(MainSeg), true);
+#else
         uintptr_t new_main_ptr = ralloc.alloc(new_seg_len * sizeof(Slot), true); // IMPORTANT: 在MN分配new main seg，注意 FIXME: ralloc没有free功能 // main_seg_size + sizeof(Slot) * SLOT_PER_SEG
+#endif
         // uint64_t new_main_len = new_seg_len; // dir->segs[seg_loc].main_seg_len + SLOT_PER_SEG;
         wo_wait_conn->pure_write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots,
                                  sizeof(Slot) * new_seg_len, lmr->lkey);

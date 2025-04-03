@@ -376,7 +376,7 @@ Retry:
         buc_ptr = (round / 2 ? bucptr_2 : bucptr_1) + (round % 2 ? sizeof(Bucket) : 0);
         for (uint64_t i = 0; i < SLOT_PER_BUCKET; i++)
         {
-            if (buc->slots[i].fp == tmp->fp && buc->slots[i].len == tmp->len && buc->slots[i].offset != tmp->offset)
+            if (buc->slots[i].fp == tmp->fp && buc->slots[i].len == tmp->len && buc->slots[i].offset != tmp->offset && is_valid_ptr(ralloc.ptr(buc->slots[i].offset)))
             {
                 char *tmp_key = (char *)alloc.alloc(buc->slots[i].len);
                 co_await conn->read(ralloc.ptr(buc->slots[i].offset), rmr.rkey, tmp_key, buc->slots[i].len, lmr->lkey);
@@ -625,7 +625,7 @@ task<> Client::MoveData(uint64_t old_seg_ptr, uint64_t new_seg_ptr, Segment *seg
 
         for (uint64_t slot_idx = 0; slot_idx < SLOT_PER_BUCKET; slot_idx++)
         {
-            if (*(uint64_t *)(&cur_buc->slots[slot_idx]) == 0)
+            if (*(uint64_t *)(&cur_buc->slots[slot_idx]) == 0 || !is_valid_ptr(ralloc.ptr(cur_buc->slots[slot_idx].offset)))
                 continue;
             KVBlock *kv_block = (KVBlock *)alloc.alloc(cur_buc->slots[slot_idx].len);
             co_await conn->read(ralloc.ptr(cur_buc->slots[slot_idx].offset), rmr.rkey, kv_block,

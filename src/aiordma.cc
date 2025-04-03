@@ -1616,8 +1616,9 @@ void rdma_conn::pure_write(uint64_t raddr, uint32_t rkey, void *laddr, uint32_t 
     send_wr->send_flags |= IBV_SEND_SIGNALED;
     ibv_send_wr *bad;
     int res = ibv_post_send(qp, send_wr, &bad);
-    if(res!=0){
-        log_err("res:%d",res);
+    if (res != 0)
+    {
+        log_err("res:%d", res);
     }
     assert_check(0 == res);
     free_buf(sge);

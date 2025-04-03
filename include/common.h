@@ -32,6 +32,7 @@
 #define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
 #define USE_XRC 1 // 使用XRC
 #define SPLIT_LOCAL_LOCK 1 // 合并/分裂时在本地上锁，参考Sherman
+#define REUSE_MAIN_SEG 1 // 允许reuse main_seg，分裂时不创建新的main_seg
 
 // #define SEND_MULTI_SEG 1 // 启用多个TempSeg，用于测试多个TempSeg的性能。
 // 1. 允许client在满时分裂 OK

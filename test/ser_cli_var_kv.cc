@@ -20,7 +20,7 @@
 #include <barrier>
 #define ORDERED_INSERT
 #define ALLOW_KEY_OVERLAP
-// #define FIXED_LOAD_SETUP
+#define FIXED_LOAD_SETUP
 #define ONLY_FIRST_CORO_START
 Config config;
 uint64_t load_num;
@@ -73,27 +73,47 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
     const uint64_t fixed_num_cli = std::min(config.num_cli, 16ul);
     const uint64_t fixed_num_coro = 1;
     uint64_t num_op = load_num / (fixed_num_machine * fixed_num_cli * fixed_num_coro);
-    
+// #ifdef ALLOW_KEY_OVERLAP
+//     Generator *gen = new seq_gen(load_num);
+// #else
+    Generator *gen = new seq_gen(num_op);
+// #endif
+    xoshiro256pp key_chooser;
+
     if (config.machine_id == 0 && coro_id == 0 && cli_id < fixed_num_cli) {
         for (uint64_t i = 0; i < num_op; i++)
         {
             if (i % 100000 == 0)
                 log_err("cli_id:%lu coro_id:%lu Load Progress: %lu/%lu", cli_id, coro_id, i, num_op);
-            GenKey((cli_id * fixed_num_coro) * num_op + i, tmp_key);
+// #ifdef ALLOW_KEY_OVERLAP // Plush?
+//             GenKey(gen->operator()(key_chooser()), tmp_key);
+// #else
+            GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + gen->operator()(key_chooser()),
+                   tmp_key);
+// #endif
+            // log_err("cli_id:%lu coro_id:%lu insert key:%lu", cli_id, coro_id, tmp_key[0]);
             co_await cli->insert(&key, &value);
         }
     }
 #else
     // Original version
     uint64_t num_op = load_num / (config.num_machine * config.num_cli * config.num_coro);
+// #ifdef ALLOW_KEY_OVERLAP
+//     Generator *gen = new seq_gen(load_num);
+// #else
     Generator *gen = new seq_gen(num_op);
+// #endif
     xoshiro256pp key_chooser;
     for (uint64_t i = 0; i < num_op; i++)
     {
         if (i % 100000 == 0)
             log_err("cli_id:%lu coro_id:%lu Load Progress: %lu/%lu", cli_id, coro_id, i, num_op);
+// #ifdef ALLOW_KEY_OVERLAP
+//         GenKey(gen->operator()(key_chooser()), tmp_key);
+// #else
         GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + gen->operator()(key_chooser()),
                tmp_key);
+// #endif
         co_await cli->insert(&key, &value);
     }
 #endif
