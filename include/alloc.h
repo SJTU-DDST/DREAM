@@ -40,9 +40,13 @@ struct RAlloc{
         return res;
     }
 
-    inline uint64_t offset(uint64_t ptr){return r_start + r_total - ptr;}
-    
-    inline uint64_t ptr(uint64_t off){return r_start + r_total - off;}
+    inline uint64_t offset(uint64_t ptr) { return r_start + r_total - ptr; }
+
+    inline uint64_t ptr(uint64_t off) { 
+        if (!is_valid_ptr(off))
+            return 0;
+        return r_start + r_total - off; 
+    }
 };
 
 struct Alloc{

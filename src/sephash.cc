@@ -115,7 +115,7 @@ void Server::Init()
         cur_seg->seg_meta.sign = 1;
     }
     
-#if HASH_TYPE == MYHASH
+#if MODIFIED
     // Initialize remaining entries in the directory (up to 65536)
     // Each entry at index i+(1<<INIT_DEPTH) is initialized with values from segs[i%(1<<INIT_DEPTH)]
     const uint64_t init_entries = (1 << INIT_DEPTH);
@@ -319,7 +319,7 @@ task<> Client::sync_dir()
         this->offset[i].main_seg_ptr = dir->segs[i].main_seg_ptr;
     }
 
-#if HASH_TYPE == MYHASH
+#if MODIFIED
     // Initialize the remaining entries in the directory (up to 65536)
     // Each entry at index i+current_dir_size is initialized with values from segs[i%current_dir_size]
     for (uint64_t i = current_dir_size; i < DIR_SIZE; i++)
@@ -404,7 +404,7 @@ Retry:
     alloc.ReSet(sizeof(Directory)+kvblock_len);
 #if !MODIFIED
     if(retry_cnt++ == 1000) {
-        log_err("[%lu:%lu:%lu]Fail to insert after %lu retries, last retry_reason: %d",cli_id,coro_id,this->key_num,retry_cnt, retry_reason);
+        // log_err("[%lu:%lu:%lu]Fail to insert after %lu retries, last retry_reason: %d",cli_id,coro_id,this->key_num,retry_cnt, retry_reason);
         perf.push_insert();
         sum_cost.end_insert();
         sum_cost.push_retry_cnt(retry_cnt);
@@ -415,7 +415,7 @@ Retry:
     Slot *tmp = (Slot *)alloc.alloc(sizeof(Slot));
     uint64_t segloc = get_seg_loc(pattern, dir->global_depth);
     uintptr_t segptr = dir->segs[segloc].cur_seg_ptr;
-    if(segptr == 0){
+    if (segptr == 0) {
         // log_err("[%lu:%lu:%lu]本地segloc:%lu的segptr=0, 客户端第一次访问这个CurSeg？",cli_id,coro_id,this->key_num,segloc);
         segptr = co_await check_gd(segloc); // 现在只会修改main_seg_len和main_seg_ptr
         uint64_t new_seg_loc = get_seg_loc(pattern, dir->global_depth);
@@ -446,7 +446,7 @@ Retry:
 #endif
     // c. 直接通过main_seg_ptr来判断一致性
     co_await std::move(read_meta);
-    if(remote_seg_meta->local_depth > dir->global_depth){
+    if (remote_seg_meta->local_depth > dir->global_depth) {
         // log_err("远端segloc:%lx上发生了Global SPlit, 远端local_depth:%lu>本地global depth%lu", segloc, remote_seg_meta->local_depth, dir->global_depth);
         // 远端segloc上发生了Global SPlit
         // log_err("[%lu:%lu:%lu]remote local_depth:%lu at segloc:%lx exceed local global depth%lu segptr:%lx",cli_id,coro_id,this->key_num,seg_meta->local_depth,segloc,dir->global_depth,segptr);
@@ -722,59 +722,6 @@ task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uin
         }
     }
 
-    // std::unordered_map<uint64_t, KVBlock *> kv_cache; // 避免重复读取相同offset的KV
-    // std::vector<rdma_future> read_tasks;                   // 存储未完成的读取任务
-
-    // // 发起所有读取请求
-    // for (auto &item : sort_items)
-    // {
-    //     if (item.need_read)
-    //     {
-    //         Slot *slot = item.slot_ptr;
-    //         uint64_t offset = ralloc.ptr(slot->offset);
-
-    //         if (kv_cache.find(offset) == kv_cache.end())
-    //         {
-    //             // 未读取过，执行RDMA读取但不等待
-    //             KVBlock *kv = (KVBlock *)alloc.alloc(slot->len * ALIGNED_SIZE);
-    //             kv_cache[offset] = kv;
-
-    //             // 直接将任务放入vector中，不进行复制
-    //             read_tasks.push_back(wo_wait_conn->read(offset, seg_rmr.rkey, kv, slot->len * ALIGNED_SIZE, lmr->lkey)); // FIXME: ENOMEM
-    //         }
-    //     }
-    // }
-
-    // // 等待所有读取完成
-    // for (auto &task : read_tasks)
-    // {
-    //     // 使用std::move转移所有权，不进行复制
-    //     co_await std::move(task);
-    // }
-
-    // // 现在所有KV块都已读取完成，可以计算hash
-    // for (auto &item : sort_items)
-    // {
-    //     if (item.need_read)
-    //     {
-    //         Slot *slot = item.slot_ptr;
-    //         uint64_t offset = ralloc.ptr(slot->offset);
-    //         KVBlock *kv = kv_cache[offset];
-
-    //         // 计算key的哈希值
-    //         if (kv->k_len <= sizeof(uint64_t))
-    //         {
-    //             // 小key直接使用值
-    //             memcpy(&item.key_hash, kv->data, kv->k_len);
-    //         }
-    //         else
-    //         {
-    //             // 大key计算哈希
-    //             item.key_hash = hash(kv->data, kv->k_len);
-    //         }
-    //     }
-    // }
-
     // 4. 根据定义的规则排序
     std::sort(sort_items.begin(), sort_items.end());
 
@@ -991,7 +938,7 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
     // 2. Read MainSeg
     uint64_t main_seg_size = sizeof(Slot) * dir->segs[seg_loc].main_seg_len;
     MainSeg *main_seg = (MainSeg *)alloc.alloc(main_seg_size);
-    if(main_seg_size)
+    if (main_seg_size)
         co_await conn->read(dir->segs[seg_loc].main_seg_ptr, seg_rmr.rkey, main_seg, main_seg_size, lmr->lkey);
 
     // 3. Sort Segment
@@ -1169,7 +1116,7 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
     // 5.1 Write New MainSeg to Remote && Update CurSegMeta
     // a. write main segment
 
-    uintptr_t new_main_ptr = ralloc.alloc(new_seg_len * sizeof(Slot), true); // IMPORTANT: 在MN分配new main seg，注意 FIXME: ralloc没有free功能 // main_seg_size + sizeof(Slot) * SLOT_PER_SEG
+    uintptr_t new_main_ptr = ralloc.alloc(new_seg_len * sizeof(Slot), true); // IMPORTANT: 在MN分配new main seg TODO: 复用现有的？
     // uint64_t new_main_len = dir->segs[seg_loc].main_seg_len + SLOT_PER_SEG;
     wo_wait_conn->pure_write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots,
                              sizeof(Slot) * new_seg_len, lmr->lkey);
@@ -1344,7 +1291,7 @@ Retry:
 #endif
     // if (res==nullptr) // 不能只有在Main中找不到时才去CurSeg中找，因为CurSeg比MainSeg更新
     {
-#if HASH_TYPE == MYHASH // For MYHASH, only read the number of slots indicated by slot_cnt
+#if MODIFIED // For MYHASH, only read the number of slots indicated by slot_cnt
         uint64_t slots_to_read = my_seg_meta->slot_cnt;
         if (slots_to_read > SLOT_PER_SEG) slots_to_read = SLOT_PER_SEG; // Safety check
         
@@ -1359,7 +1306,7 @@ Retry:
         for (uint64_t i = SLOT_PER_SEG - 1; i != -1; i--)
 #endif
         {
-#if HASH_TYPE == MYHASH // IMPORTANT: 对于MYHASH，还要匹配local_depth，不匹配的是乐观写入时写错segment的条目
+#if MODIFIED // IMPORTANT: 对于MYHASH，还要匹配local_depth，不匹配的是乐观写入时写错segment的条目
             if (curseg_slots[i] != 0 && curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].dep == dep_info && curseg_slots[i].fp_2 == pattern_fp2 && curseg_slots[i].local_depth == my_seg_meta->local_depth && curseg_slots[i].is_valid())
 #else
             if (curseg_slots[i] != 0 && curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].dep == dep_info && curseg_slots[i].fp_2 == pattern_fp2 && curseg_slots[i].is_valid())
@@ -1393,7 +1340,7 @@ Retry:
         // 合并两次循环，同时查找fp匹配+fp2匹配的条目和fp匹配但fp2不匹配的条目
         for (uint64_t i = 0; i < end_pos - start_pos; i++)
         {
-#if HASH_TYPE == MYHASH // MYHASH: 只有fp_2匹配的才读取并检查完整key
+#if MODIFIED // MYHASH: 只有fp_2匹配的才读取并检查完整key
             if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info && main_seg[i].fp_2 == pattern_fp2 && main_seg[i].is_valid())
 #else // SepHash: 不论fp_2是否匹配，都读取并检查完整key
             if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info && main_seg[i].is_valid())
@@ -1406,6 +1353,8 @@ Retry:
 #ifdef TOO_LARGE_KV
                 co_await wo_wait_conn->read(kv_ptr, seg_rmr.rkey, kv_block, this->kv_block_len, lmr->lkey);
 #else
+                if (is_valid_ptr(kv_ptr) == false)
+                    continue;
                 co_await wo_wait_conn->read(kv_ptr, seg_rmr.rkey, kv_block, (main_seg[i].len) * ALIGNED_SIZE, lmr->lkey);
 #endif
 

@@ -69,7 +69,7 @@ struct Slot
     {
         return (fp < a.fp) || (fp == a.fp && fp_2 < a.fp_2);
     }
-    void print(uint64_t slot_id = -1)
+    void print(uint64_t slot_id = -1) const
     {
         if (slot_id != -1)
             printf("slot_id:%lu\t", slot_id);
@@ -82,7 +82,7 @@ struct Slot
         printf("local_depth:%d\t", local_depth);
         printf("size:%ld\n", sizeof(Slot));
     }
-    void print(const std::string &message)
+    void print(const std::string &message) const
     {
         log_err("%s\t fp:%02x\t fp_2:%02x\t len:%d\t sign:%d\t dep:%02d\t offset:%012lx\t local_depth:%d\t size:%ld",
                message.c_str(), fp, fp_2, len, sign, dep, offset, local_depth, sizeof(Slot));
@@ -107,13 +107,13 @@ struct Slot
     bool is_valid() const
     {
         // Check if offset is within valid range: 100 <= offset <= 99999999999
-        if (offset < 100 || offset > 99999999999ULL)
+        if (offset < 10000 || offset > 99999999999ULL)
             return false;
-            
+#if MODIFIED
         // Check if local_depth is valid: 0 < local_depth <= 16
         if (local_depth == 0 || local_depth > 16)
             return false;
-            
+#endif
         return true;
     }
 } __attribute__((aligned(1)));

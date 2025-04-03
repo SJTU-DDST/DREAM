@@ -141,6 +141,10 @@
 
 const uint32_t cache_line_size = 64;
 
+inline bool is_valid_ptr(uintptr_t ptr){
+    return ptr >= 10000 && ptr < (1ULL << 48);
+}
+
 template <typename T>
 requires std::is_integral_v<T>
 constexpr bool is_power_of2(T val) noexcept { return val >= 0 && (val & (val - 1)) == 0; }
