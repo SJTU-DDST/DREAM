@@ -15,12 +15,12 @@
 #include <set>
 #include <stdint.h>
 #define ORDERED_INSERT
-#define ALLOW_KEY_OVERLAP
+// #define ALLOW_KEY_OVERLAP
 Config config;
 uint64_t load_num;
-using ClientType = SEPHASH::Client;
-using ServerType = SEPHASH::Server;
-using Slice = SEPHASH::Slice;
+using ClientType = RACE::Client;
+using ServerType = RACE::Server;
+using Slice = RACE::Slice;
 
 constexpr uint64_t key_len = 2;
 constexpr uint64_t value_len = 32;
