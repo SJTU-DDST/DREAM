@@ -33,6 +33,7 @@
 #define USE_XRC 1 // 使用XRC
 #define SPLIT_LOCAL_LOCK 1 // 合并/分裂时在本地上锁，参考Sherman
 #define REUSE_MAIN_SEG 1 // 允许reuse main_seg，分裂时不创建新的main_seg
+#define DISABLE_OPTIMISTIC_SPLIT 0 // 禁用客户端的乐观分裂检测，用于性能分解实验
 
 // #define SEND_MULTI_SEG 1 // 启用多个TempSeg，用于测试多个TempSeg的性能。
 // 1. 允许client在满时分裂 OK

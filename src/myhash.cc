@@ -38,6 +38,17 @@ namespace MYHASH
         uintptr_t segptr = dir->segs[segloc].cur_seg_ptr;
         assert_require(segptr != 0);
 
+#if DISABLE_OPTIMISTIC_SPLIT
+        uint64_t old_segloc = segloc;
+        co_await check_gd(segloc, false, true);
+        uint64_t new_segloc = get_seg_loc(pattern, dir->global_depth);
+        new_segloc %= (1 << dir->segs[new_segloc].local_depth);
+        if (old_segloc != new_segloc) {
+            retry_cnt++;
+            goto Retry;
+        }
+#endif
+
         // 4. write slot
         // a. Init Slot
         uint64_t dep = dir->segs[segloc].local_depth - (dir->segs[segloc].local_depth % 4);

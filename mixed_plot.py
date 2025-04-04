@@ -17,6 +17,7 @@ colors = {
     'Plush': c[2],
     'SEPHASH': c[3],
     'MYHASH': c[4],
+    'MYHASH-NoOpt': c[5],
     'insert': c[0],
     'update': c[1],
     'read': c[2],
@@ -28,6 +29,7 @@ hatches = {
     'Plush': hat[2],
     'SEPHASH': hat[3],
     'MYHASH': hat[4],
+    'MYHASH-NoOpt': hat[5],
 }
 
 markers = {
@@ -36,6 +38,7 @@ markers = {
     'Plush': markers[2],
     'SEPHASH': markers[3],
     'MYHASH': markers[4],
+    'MYHASH-NoOpt': markers[5],
     'insert': markers[0],
     'update': markers[1],
     'read': markers[2],
@@ -49,10 +52,22 @@ def hash_type_to_label(hash_type):
     else:
         return hash_type
 
+def hash_type_to_label_breakdown(hash_type):
+    if hash_type == 'MYHASH':
+        return '+Split'
+    elif hash_type == 'MYHASH-NoOpt':
+        return '+CC&Merge'
+    elif hash_type == 'SEPHASH':
+        return 'Base'
+    elif hash_type == 'RACE-Partitioned':
+        return 'RACE-P'
+    else:
+        return hash_type 
+
 # 定义哈希类型的顺序
 def sort_hash_types(hash_types):
     # 指定的顺序: RACE, RACE-Partitioned, Plush, SepHash, MYHASH
-    order = {"RACE": 1, "RACE-Partitioned": 2, "Plush": 3, "SEPHASH": 4, "MYHASH": 5}
+    order = {"RACE": 1, "RACE-Partitioned": 2, "Plush": 3, "SEPHASH": 4, "MYHASH-NoOpt": 5, "MYHASH": 6}
     return sorted(hash_types, key=lambda x: order.get(x, 999))  # 未指定的类型放在最后
 
 # 定义数据目录
@@ -307,7 +322,7 @@ def plot_variable_kv(ax):
     # 设置图表属性
     ax.set_xlabel('KV Size (bytes)')
     ax.set_ylabel('Average Latency (μs)')
-    ax.set_title('Variable KV Size')
+    ax.set_title('Variable KV Sizes')
     
     # Set x-tick positions and labels manually
     ax.set_xticks(list(range(len(sizes))))
@@ -316,12 +331,80 @@ def plot_variable_kv(ax):
     ax.grid(axis='y', linestyle='-.')
     # ax.legend()
 
-def plot_decomposition(ax):
-    ax.text(0.5, 0.5, 'Decomposition\n(WIP)', 
-            horizontalalignment='center', verticalalignment='center', 
-            transform=ax.transAxes)
-    ax.set_title('Performance Decomposition')
-    # 添加占位符，后续实现具体绘图逻辑
+def plot_breakdown(ax):
+    # 定义数据目录
+    data_dir = "../data/data_insert_breakdown"
+    
+    # 获取所有哈希类型
+    hash_types = []
+    if os.path.exists(data_dir):
+        hash_types = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+    
+    # 使用自定义顺序排序哈希类型
+    hash_types = sort_hash_types(hash_types)
+    
+    # 动态获取所有可用的线程数
+    all_threads = set()
+    for hash_type in hash_types:
+        hash_type_dir = os.path.join(data_dir, hash_type)
+        if os.path.exists(hash_type_dir):
+            threads = [int(d) for d in os.listdir(hash_type_dir) if os.path.isdir(os.path.join(hash_type_dir, d)) and d.isdigit()]
+            all_threads.update(threads)
+    
+    threads = sorted(all_threads)  # 排序线程数
+    
+    # 收集数据
+    data = {}
+    for hash_type in hash_types:
+        data[hash_type] = {}
+        for thread in threads:
+            thread_dir = os.path.join(data_dir, hash_type, str(thread))
+            if not os.path.exists(thread_dir):
+                continue
+                
+            iops_values = []
+            for file_name in os.listdir(thread_dir):
+                if file_name.startswith("out"):
+                    file_path = os.path.join(thread_dir, file_name)
+                    iops = extract_iops(file_path)
+                    if iops:
+                        iops_values.append(iops)
+            
+            if iops_values:
+                avg_iops = np.mean(iops_values)
+                data[hash_type][thread] = avg_iops
+    
+    # 使用均匀间隔的x轴位置
+    x_positions = list(range(len(threads)))
+    
+    # 绘制折线图
+    for hash_type in hash_types:
+        if not data[hash_type]:
+            continue
+            
+        threads_available = sorted(data[hash_type].keys())
+        iops_values = [data[hash_type][t] for t in threads_available]
+        
+        # 将实际线程数映射到均匀间隔的位置
+        positions = [x_positions[threads.index(t)] for t in threads_available]
+        
+        ax.plot(positions, iops_values,
+                marker=markers.get(hash_type, 'o'),
+                color=colors.get(hash_type, 'black'),
+                label=hash_type_to_label_breakdown(hash_type),
+                lw=2.5, mec='black', markersize=7)
+    
+    # 设置图表属性
+    ax.set_xlabel('Number of Threads')
+    ax.set_ylabel('Throughput (Kops)')
+    ax.set_title('Breakdown Analysis')
+    
+    # 设置x轴刻度为均匀间隔
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([str(t) for t in threads], rotation=45)
+    
+    # 添加网格线
+    ax.grid(True, which='both', linestyle='-.')
 
 if __name__ == "__main__":
     # 创建 1x4 子图布局
@@ -337,7 +420,7 @@ if __name__ == "__main__":
     plot_variable_kv(axs[2])
     
     # Fig 4: 分解
-    plot_decomposition(axs[3])
+    plot_breakdown(axs[3])
 
     # 收集所有子图的图例信息
     all_handles = []
@@ -371,10 +454,12 @@ if __name__ == "__main__":
     
     # 为第三张子图（变长KV）创建单独的图例
     handles3, labels3 = axs[2].get_legend_handles_labels()
-    # axs[2].legend(handles3, labels3, loc='upper center', 
-    #             bbox_to_anchor=(0.5, 1.25), ncol=1, frameon=True)
     fig.legend(handles3, labels3, loc='upper center',
             bbox_to_anchor=(0.65, 1.25), ncol=1, frameon=True)
+    
+    handles4, labels4 = axs[3].get_legend_handles_labels()
+    fig.legend(handles4, labels4, loc='upper center',
+            bbox_to_anchor=(0.85, 1.21), ncol=2, frameon=True)
     
     # 调整整体布局
     plt.tight_layout()

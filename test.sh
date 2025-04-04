@@ -180,6 +180,32 @@ set_fp_collision_mode() {
     echo "设置 READ_FULL_KEY_ON_FP_COLLISION 为 ${value}"
 }
 
+# 新增函数：控制 DISABLE_OPTIMISTIC_SPLIT 定义
+toggle_optimistic_split() {
+    local disable=$1  # "disable" 或 "enable"
+    local common_h_path="../include/common.h"
+    
+    if [ "$disable" == "disable" ]; then
+        # 将 DISABLE_OPTIMISTIC_SPLIT 设置为 1
+        sed -i 's/#define DISABLE_OPTIMISTIC_SPLIT 0/#define DISABLE_OPTIMISTIC_SPLIT 1/' "$common_h_path"
+        echo "已禁用乐观分裂 (DISABLE_OPTIMISTIC_SPLIT=1)"
+    else
+        # 将 DISABLE_OPTIMISTIC_SPLIT 设置为 0
+        sed -i 's/#define DISABLE_OPTIMISTIC_SPLIT 1/#define DISABLE_OPTIMISTIC_SPLIT 0/' "$common_h_path"
+        echo "已启用乐观分裂 (DISABLE_OPTIMISTIC_SPLIT=0)"
+    fi
+}
+
+# 函数：检查哈希类型是否为 MYHASH-NoOpt
+is_noopt_hash() {
+    local hash_type=$1
+    if [ "$hash_type" == "MYHASH-NoOpt" ]; then
+        return 0  # 是 MYHASH-NoOpt
+    else
+        return 1  # 不是 MYHASH-NoOpt
+    fi
+}
+
 # 如果实验类型包含"insert"且不是check模式，设置fp碰撞模式为false
 if [ "$experiment_type" = "insert" ] && [ "$mode" != "check" ]; then
     set_fp_collision_mode false
@@ -200,6 +226,13 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
             toggle_key_overlap "disable"
         else
             toggle_key_overlap "enable"
+        fi
+        
+        # 检查是否为 MYHASH-NoOpt 并相应设置 DISABLE_OPTIMISTIC_SPLIT
+        if is_noopt_hash "$hash_type"; then
+            toggle_optimistic_split "disable"
+        else
+            toggle_optimistic_split "enable"
         fi
         
         for num_cli in "${num_cli_list[@]}"; do
@@ -280,6 +313,8 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
     
     # 确保最后恢复ALLOW_KEY_OVERLAP
     toggle_key_overlap "enable"
+    # 确保恢复乐观分裂设置
+    toggle_optimistic_split "enable"
     
     if [ "$mode" == "check" ]; then
         echo "检查完成：总共有 ${need_rerun_count} 个实验需要重新运行"
@@ -314,6 +349,13 @@ for hash_type in "${hash_types[@]}"; do
         toggle_key_overlap "disable"
     else
         toggle_key_overlap "enable"
+    fi
+    
+    # 检查是否为 MYHASH-NoOpt 并相应设置 DISABLE_OPTIMISTIC_SPLIT
+    if is_noopt_hash "$hash_type"; then
+        toggle_optimistic_split "disable"
+    else
+        toggle_optimistic_split "enable"
     fi
     
     # 确保目标目录存在
@@ -373,6 +415,8 @@ done
 
 # 确保最后恢复ALLOW_KEY_OVERLAP
 toggle_key_overlap "enable"
+# 确保恢复乐观分裂设置
+toggle_optimistic_split "enable"
 
 # 实验结束后恢复默认脚本
 if [ -f "../ser_cli.sh" ]; then
