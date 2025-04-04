@@ -30,7 +30,7 @@ using ServerType = HASH_TYPE::Server;
 using Slice = HASH_TYPE::Slice;
 
 constexpr uint64_t key_len = 2; // 2 * 8B = 16B
-constexpr uint64_t value_len = 32; // 32B
+constexpr uint64_t value_len = 32;
 
 void GenKey(uint64_t key, uint64_t *tmp_key)
 {

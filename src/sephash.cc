@@ -1204,7 +1204,7 @@ Retry:
     uintptr_t cur_seg_ptr = dir->segs[segloc].cur_seg_ptr;
     uintptr_t main_seg_ptr = dir->segs[segloc].main_seg_ptr;
     uint64_t main_seg_len = dir->segs[segloc].main_seg_len;
-    if(cur_seg_ptr==0 || main_seg_ptr == 0){ // FIXME: stuck here, main_seg_ptr is 0 when load_num < num_op
+    if (cur_seg_ptr == 0 || main_seg_ptr == 0) { // FIXME: stuck here, main_seg_ptr is 0 when load_num < num_op
         // log_err("seg_loc:%lu,cur_seg_ptr:%lx main_seg_ptr:%lx",segloc,cur_seg_ptr,main_seg_ptr);
         cur_seg_ptr = co_await check_gd(segloc,true);
         this->offset[segloc].offset = 0;

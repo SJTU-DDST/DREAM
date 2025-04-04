@@ -1,0 +1,17 @@
+# ../test.sh insert_size64 run "1" "MYHASH"
+# ../test.sh insert_size128 run "1" "MYHASH"
+# ../test.sh insert_size512 run "1" "MYHASH"
+# ../test.sh insert_size2048 run "1" "MYHASH"
+# ../test.sh insert_size8192 run "1" "MYHASH"
+
+# ../test.sh update_size64 run "1" "MYHASH"
+# ../test.sh update_size128 run "1" "MYHASH"
+# ../test.sh update_size512 run "1" "MYHASH"
+# ../test.sh update_size2048 run "1" "MYHASH"
+# ../test.sh update_size8192 run "1" "MYHASH"
+
+../test.sh read_size64 run "1" "MYHASH"
+../test.sh read_size128 run "1" "MYHASH"
+../test.sh read_size512 run "1" "MYHASH"
+../test.sh read_size2048 run "1" "MYHASH"
+../test.sh read_size8192 run "1" "MYHASH"

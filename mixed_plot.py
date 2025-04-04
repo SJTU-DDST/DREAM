@@ -17,6 +17,9 @@ colors = {
     'Plush': c[2],
     'SEPHASH': c[3],
     'MYHASH': c[4],
+    'insert': c[0],
+    'update': c[1],
+    'read': c[2],
 }
 
 hatches = {
@@ -33,6 +36,9 @@ markers = {
     'Plush': markers[2],
     'SEPHASH': markers[3],
     'MYHASH': markers[4],
+    'insert': markers[0],
+    'update': markers[1],
+    'read': markers[2],
 }
 
 def hash_type_to_label(hash_type):
@@ -57,6 +63,15 @@ def extract_iops(file_path):
     with open(file_path, 'r') as f:
         content = f.read()
         match = re.search(r'Run IOPS:([\d.]+)Kops', content)
+        if match:
+            return float(match.group(1))
+    return None
+
+# 定义提取延迟的函数
+def extract_latency(file_path):
+    with open(file_path, 'r') as f:
+        content = f.read()
+        match = re.search(r'avg latency: ([\d.]+) us', content)
         if match:
             return float(match.group(1))
     return None
@@ -218,7 +233,6 @@ def plot_ycsb(ax):
         
         offset_idx = i - 1 if i > 0 else 0 # RACE and RACE-Partitioned share the same offset
         position = index + offsets[offset_idx]
-        print(i, hash_type, position, values)
         ax.bar(position, values, bar_width,
                color=colors[hash_type],
                edgecolor='black',
@@ -243,11 +257,64 @@ def plot_ycsb(ax):
     ax.grid(axis='y', linestyle='-.')
 
 def plot_variable_kv(ax):
-    ax.text(0.5, 0.5, 'Variable Length KV\n(WIP)', 
-            horizontalalignment='center', verticalalignment='center', 
-            transform=ax.transAxes)
+    # 定义操作和KV大小
+    operations = ['insert', 'update', 'read']
+    sizes = [64, 128, 512, 2048, 8192]
+    
+    # 收集数据
+    data = {}
+    for operation in operations:
+        data[operation] = {}
+        for size in sizes:
+            data_dir = f"../data/data_{operation}_size{size}"
+            if not os.path.exists(data_dir):
+                print(f"Directory {data_dir} does not exist.")
+                continue
+            
+            latency_values = []
+            for hash_type in colors.keys():
+                thread_dir = os.path.join(data_dir, hash_type, "1")
+                if not os.path.exists(thread_dir):
+                    continue
+                
+                for file_name in os.listdir(thread_dir):
+                    if file_name.startswith("out"):
+                        file_path = os.path.join(thread_dir, file_name)
+                        latency = extract_latency(file_path)
+                        if latency:
+                            latency_values.append(latency)
+            if latency_values:
+                avg_latency = np.mean(latency_values)
+                data[operation][size] = avg_latency
+    
+    # 绘制折线图
+    for operation in operations:
+        if not data[operation]:
+            continue
+        
+        sizes_available = sorted(data[operation].keys())
+        latencies = [data[operation][size] for size in sizes_available]
+        
+        # Use positions 0, 1, 2, etc. for x-axis instead of actual size values
+        x_positions = list(range(len(sizes_available)))
+        
+        ax.plot(x_positions, latencies, 
+                marker=markers.get(operation, 'o'),
+                color=colors.get(operation, 'black'),
+                label=operation.capitalize(),
+                lw=3, mec='black', markersize=8, alpha=1)
+    
+    # 设置图表属性
+    ax.set_xlabel('KV Size (bytes)')
+    ax.set_ylabel('Average Latency (μs)')
     ax.set_title('Variable KV Size')
-    # 添加占位符，后续实现具体绘图逻辑
+    
+    # Set x-tick positions and labels manually
+    ax.set_xticks(list(range(len(sizes))))
+    ax.set_xticklabels([str(size) if size < 1000 else f"{size//1024}K" for size in sizes])
+    
+    ax.grid(axis='y', linestyle='-.')
+    # ax.legend()
 
 def plot_decomposition(ax):
     ax.text(0.5, 0.5, 'Decomposition\n(WIP)', 
@@ -272,9 +339,6 @@ if __name__ == "__main__":
     # Fig 4: 分解
     plot_decomposition(axs[3])
 
-    # handles, labels = axs[0].get_legend_handles_labels()
-    # fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=4, frameon=False)
-
     # 收集所有子图的图例信息
     all_handles = []
     all_labels = []
@@ -298,9 +362,19 @@ if __name__ == "__main__":
             ordered_handles.append(all_handles[idx])
             ordered_labels.append(label)
 
-    # 创建全局图例，使用排序后的图例元素
+    # 创建仅针对前两个子图的图例
+    # 计算前两个子图的中心位置
+    # 由于我们有4个子图，每个占据25%的宽度，前两个子图总共占50%的宽度
+    # 所以中心位置应该在25%的位置(0.25)
     fig.legend(ordered_handles, ordered_labels, loc='upper center', 
-            bbox_to_anchor=(0.5, 1.05), ncol=5, frameon=False)
+            bbox_to_anchor=(0.275, 1.25), ncol=2, frameon=True)
+    
+    # 为第三张子图（变长KV）创建单独的图例
+    handles3, labels3 = axs[2].get_legend_handles_labels()
+    # axs[2].legend(handles3, labels3, loc='upper center', 
+    #             bbox_to_anchor=(0.5, 1.25), ncol=1, frameon=True)
+    fig.legend(handles3, labels3, loc='upper center',
+            bbox_to_anchor=(0.65, 1.25), ncol=1, frameon=True)
     
     # 调整整体布局
     plt.tight_layout()

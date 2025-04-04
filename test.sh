@@ -6,7 +6,76 @@
 
 # 默认参数
 experiment_type=${1:-"insert"}
+original_experiment_type=$experiment_type  # 保存原始实验类型名称
 mode=${2:-"run"}  # 可以是 "run", "rerun" 或 "check"
+
+# 函数：解析实验类型，提取大小并设置实际实验类型
+parse_experiment_size() {
+    local full_exp_type=$1
+    local base_exp_type=$full_exp_type
+    local size_value=0
+    local var_kv_path="../test/ser_cli_var_kv.cc"
+    
+    # 检查实验类型是否包含 _size 后缀
+    if [[ "$full_exp_type" =~ _size([0-9]+)$ ]]; then
+        size_value="${BASH_REMATCH[1]}"
+        base_exp_type="${full_exp_type%%_size*}"
+        
+        # 计算 value_len = size - 2
+        value_len=$((size_value - 2))
+        
+        # 修改 ser_cli_var_kv.cc 中的 value_len
+        echo "检测到 _size${size_value} 后缀，设置 value_len 为 ${value_len}" >&2
+        sed -i "s/constexpr uint64_t value_len = [0-9]\+;/constexpr uint64_t value_len = ${value_len};/" "$var_kv_path"
+        
+        # 验证修改成功
+        grep "constexpr uint64_t value_len" "$var_kv_path" >&2
+    fi
+    
+    # 只返回基础实验类型
+    echo "$base_exp_type"
+}
+
+# 函数：恢复默认的 value_len
+restore_default_value_len() {
+    local var_kv_path="../test/ser_cli_var_kv.cc"
+    echo "恢复默认 value_len 为 32"
+    sed -i "s/constexpr uint64_t value_len = [0-9]\+;/constexpr uint64_t value_len = 32;/" "$var_kv_path"
+}
+
+# 函数：修改实验脚本中的操作数量
+modify_num_op() {
+    local exp_type=$1
+    local restore=$2
+    local script_path="../scripts/ser_cli_${exp_type}.sh"
+    
+    if [ ! -f "$script_path" ]; then
+        echo "警告: 脚本文件 ${script_path} 不存在，无法修改 num_op"
+        return 1
+    fi
+    
+    if [ "$restore" = true ]; then
+        # 恢复为原始值
+        sed -i 's/num_op=1000000/num_op=10000000/' "$script_path"
+        sed -i 's/for load_num in 1000000;do/for load_num in 10000000;do/' "$script_path"
+        echo "已恢复 ${script_path} 中的 num_op 和 load_num 为 10000000"
+    else
+        # 修改为较小值
+        sed -i 's/num_op=10000000/num_op=1000000/' "$script_path"
+        sed -i 's/for load_num in 10000000;do/for load_num in 1000000;do/' "$script_path"
+        echo "已修改 ${script_path} 中的 num_op 和 load_num 为 1000000"
+    fi
+}
+
+# 解析实验类型并可能修改 value_len
+base_experiment_type=$(parse_experiment_size "$experiment_type")
+# 如果 base_experiment_type 与 experiment_type 不同，说明包含 _size 后缀
+if [ "$base_experiment_type" != "$experiment_type" ]; then
+    echo "实际运行实验类型: $base_experiment_type (原始: $experiment_type)"
+    # 如果包含 _size 后缀，修改对应脚本中的 num_op
+    modify_num_op "$base_experiment_type" false
+    experiment_type="$base_experiment_type"
+fi
 
 # 解析可选的线程数列表参数（第三个参数）
 if [ -n "$3" ]; then
@@ -134,7 +203,7 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
         fi
         
         for num_cli in "${num_cli_list[@]}"; do
-            base_dir="data_${experiment_type}/${hash_type}/${num_cli}"
+            base_dir="data_${original_experiment_type}/${hash_type}/${num_cli}"
             
             # 检查目录是否存在
             if [ ! -d "$base_dir" ]; then
@@ -226,13 +295,18 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
         #     set_fp_collision_mode true
         # fi
         
+        # 如果是检查模式且之前修改了 num_op，则恢复
+        if [ "$mode" == "check" ] && [ "$base_experiment_type" != "$original_experiment_type" ]; then
+            modify_num_op "$experiment_type" true
+        fi
+        
         exit 0
     fi
 fi
 
 # 正常运行模式
 for hash_type in "${hash_types[@]}"; do
-    base_dir="data_${experiment_type}/${hash_type}"
+    base_dir="data_${original_experiment_type}/${hash_type}"
     set_hash_type "$hash_type"
     
     # 根据哈希类型决定是否禁用key overlap
@@ -285,7 +359,7 @@ for hash_type in "${hash_types[@]}"; do
         
         # 移动生成的out*.txt文件到num_cli目录
         for filename in out*.txt; do
-            if [ -f "$filename" ]; then
+            if [ -f "$filename" ];then
                 mv "$filename" "${num_cli_dir}/"
             fi
         done
@@ -307,3 +381,11 @@ fi
 cp "$default_script" "../ser_cli.sh"
 
 set_fp_collision_mode true
+
+# 如果之前修改过 value_len，现在恢复默认值
+restore_default_value_len
+
+# 如果之前修改过 num_op，现在恢复原始值
+if [ "$base_experiment_type" != "$original_experiment_type" ]; then
+    modify_num_op "$experiment_type" true
+fi
