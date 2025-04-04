@@ -503,7 +503,7 @@ def plot_breakdown(ax):
     ax.set_xticklabels([str(t) for t in threads], rotation=45)
     
     # 添加网格线
-    ax.grid(True, which='both', linestyle='-.')
+    ax.grid(axis='y', linestyle='-.')
 
 if __name__ == "__main__":
     # 创建 1x4 子图布局
