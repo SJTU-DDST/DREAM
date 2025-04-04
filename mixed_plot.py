@@ -170,6 +170,26 @@ def plot_mixed(ax):
                hatch=hatches[hash_type],
                label=hash_type_to_label(hash_type))
     
+    # 计算DREAM相对于其他哈希的性能提升百分比
+    for i, ratio_label in enumerate(data.keys()):
+        if 'MYHASH' in data[ratio_label]:  # MYHASH是DREAM
+            dream_value = data[ratio_label]['MYHASH']
+            improvements = []
+            
+            for hash_type in all_hash_types:
+                if hash_type != 'MYHASH' and hash_type in data[ratio_label] and data[ratio_label][hash_type] > 0:
+                    improvement = (dream_value / data[ratio_label][hash_type] - 1) * 100
+                    improvements.append(improvement)
+            
+            if improvements:
+                min_improvement = min(improvements)
+                max_improvement = max(improvements)
+                # improvement_text = f"{min_improvement:.1f}%\n{max_improvement:.1f}%"
+                
+                # # 在柱状图上方显示提升范围
+                # ax.text(i, dream_value * 1.05, improvement_text, ha='center', va='bottom', fontsize=8)
+                print(f"Insert/Search Ratio: {ratio_label}, DREAM Improvement: {min_improvement:.1f}% ~ {max_improvement:.1f}%")
+    
     # 设置图表属性
     ax.set_xlabel('Insert/Search Ratio')
     ax.set_ylabel('Throughput (Kops)')
@@ -255,6 +275,26 @@ def plot_ycsb(ax):
                hatch=hatches[hash_type],
                label=hash_type_to_label(hash_type))
     
+    # 计算DREAM相对于其他哈希的性能提升百分比
+    for i, label in enumerate(data.keys()):
+        if 'MYHASH' in data[label]:  # MYHASH是DREAM
+            dream_value = data[label]['MYHASH']
+            improvements = []
+            
+            for hash_type in all_hash_types:
+                if hash_type != 'MYHASH' and hash_type in data[label] and data[label][hash_type] > 0:
+                    improvement = (dream_value / data[label][hash_type] - 1) * 100
+                    improvements.append(improvement)
+            
+            if improvements:
+                min_improvement = min(improvements)
+                max_improvement = max(improvements)
+                # improvement_text = f"{min_improvement:.1f}%\n{max_improvement:.1f}%"
+                
+                # # 在柱状图上方显示提升范围
+                # ax.text(i, dream_value * 1.05, improvement_text, ha='center', va='bottom', fontsize=8)
+                print(f"YCSB Type: {label}, DREAM Improvement: {min_improvement:.1f}% ~ {max_improvement:.1f}%")
+    
     # 设置图表属性
     ax.set_xlabel('YCSB Workload')
     ax.set_ylabel('Throughput (Kops)')
@@ -301,6 +341,32 @@ def plot_variable_kv(ax):
             if latency_values:
                 avg_latency = np.mean(latency_values)
                 data[operation][size] = avg_latency
+    
+    # 计算并输出每个KV大小相对于所有较小KV大小的延迟变化百分比
+    for operation in operations:
+        if not data[operation]:
+            continue
+        
+        print(f"\n--- {operation.capitalize()} Operation Latency Changes ---")
+        sorted_sizes = sorted(data[operation].keys())
+        
+        for i, current_size in enumerate(sorted_sizes):
+            if i == 0:  # 最小的KV大小没有比它更小的
+                continue
+                
+            current_latency = data[operation][current_size]
+            
+            # 对于当前大小，计算与所有较小大小的延迟变化
+            for j in range(i):
+                smaller_size = sorted_sizes[j]
+                smaller_latency = data[operation][smaller_size]
+                
+                percentage_change = ((current_latency - smaller_latency) / smaller_latency) * 100
+                
+                size_label_current = f"{current_size}" if current_size < 1000 else f"{current_size//1024}K"
+                size_label_smaller = f"{smaller_size}" if smaller_size < 1000 else f"{smaller_size//1024}K"
+                
+                print(f"{operation.capitalize()}: {size_label_current} vs {size_label_smaller}: +{percentage_change:.2f}%")
     
     # 绘制折线图
     for operation in operations:
@@ -373,6 +439,39 @@ def plot_breakdown(ax):
             if iops_values:
                 avg_iops = np.mean(iops_values)
                 data[hash_type][thread] = avg_iops
+    
+    # 计算并输出每个哈希类型相比前一个哈希类型的性能提升百分比
+    print("\n--- Breakdown Analysis Performance Improvements ---")
+    for i, hash_type in enumerate(hash_types):
+        if i == 0:  # 第一个哈希类型没有前一个类型可比较
+            continue
+        
+        prev_hash_type = hash_types[i-1]
+        
+        # 检查两个哈希类型是否都有数据
+        common_threads = set(data[hash_type].keys()) & set(data[prev_hash_type].keys())
+        if not common_threads:
+            continue
+        
+        improvements = []
+        for thread in common_threads:
+            current_iops = data[hash_type][thread]
+            prev_iops = data[prev_hash_type][thread]
+            
+            if prev_iops > 0:
+                improvement = ((current_iops - prev_iops) / prev_iops) * 100
+                improvements.append((thread, improvement))
+        
+        if improvements:
+            min_improvement = min(improvements, key=lambda x: x[1])
+            max_improvement = max(improvements, key=lambda x: x[1])
+            
+            current_label = hash_type_to_label_breakdown(hash_type)
+            prev_label = hash_type_to_label_breakdown(prev_hash_type)
+            
+            print(f"{current_label} vs {prev_label}:")
+            print(f"  Min improvement: {min_improvement[1]:.2f}% (at {min_improvement[0]} threads)")
+            print(f"  Max improvement: {max_improvement[1]:.2f}% (at {max_improvement[0]} threads)")
     
     # 使用均匀间隔的x轴位置
     x_positions = list(range(len(threads)))
