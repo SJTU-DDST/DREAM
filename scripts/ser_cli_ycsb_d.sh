@@ -41,8 +41,8 @@ else
                 --load_num $load_num \
                 --num_op $num_op \
                 --pattern_type 3 \
-                --insert_frac 0.95 \
-                --read_frac   0.05 \
+                --insert_frac 0.05 \
+                --read_frac   0.95 \
                 --update_frac  0.0 \
                 --delete_frac  0.0 \
                 --read_size     64

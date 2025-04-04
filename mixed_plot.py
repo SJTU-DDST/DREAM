@@ -10,6 +10,31 @@ c = np.array([[102, 194, 165], [252, 141, 98], [141, 160, 203],
         [231, 138, 195], [166,216,84], [255, 217, 47],
         [229, 196, 148], [179, 179, 179]])
 c  = c/255
+
+colors = {
+    'RACE': c[0],
+    'RACE-Partitioned': c[1],
+    'Plush': c[2],
+    'SEPHASH': c[3],
+    'MYHASH': c[4],
+}
+
+hatches = {
+    'RACE': hat[0],
+    'RACE-Partitioned': hat[1],
+    'Plush': hat[2],
+    'SEPHASH': hat[3],
+    'MYHASH': hat[4],
+}
+
+markers = {
+    'RACE': markers[0],
+    'RACE-Partitioned': markers[1],
+    'Plush': markers[2],
+    'SEPHASH': markers[3],
+    'MYHASH': markers[4],
+}
+
 def hash_type_to_label(hash_type):
     if hash_type == 'MYHASH':
         return 'DREAM'
@@ -109,10 +134,10 @@ def plot_mixed(ax):
         
         position = index + offsets[i]  # Apply offset for each hash type
         ax.bar(position, values, bar_width,
-               color=c[i % len(c)],
+               color=colors[hash_type],
                edgecolor='black',
                lw=1.2,
-               hatch=hat[i % len(hat)],
+               hatch=hatches[hash_type],
                label=hash_type_to_label(hash_type))
     
     # 设置图表属性
@@ -132,11 +157,90 @@ def plot_mixed(ax):
     ax.grid(axis='y', linestyle='-.')
 
 def plot_ycsb(ax):
-    ax.text(0.5, 0.5, 'YCSB Benchmarks\n(WIP)', 
-            horizontalalignment='center', verticalalignment='center', 
-            transform=ax.transAxes)
+    # 定义YCSB数据目录
+    ycsb_types = ['a', 'b', 'c', 'd']
+    data = {}
+    
+    all_hash_types = set()
+    # 收集所有哈希类型
+    for ycsb_type in ycsb_types:
+        ycsb_dir = f"../data/data_ycsb_{ycsb_type}"
+        if os.path.exists(ycsb_dir):
+            hash_types = [d for d in os.listdir(ycsb_dir) if os.path.isdir(os.path.join(ycsb_dir, d))]
+            all_hash_types.update(hash_types)
+    
+    # 使用自定义顺序排序哈希类型
+    all_hash_types = sort_hash_types(list(all_hash_types))
+    
+    # 收集每种YCSB类型的数据
+    for ycsb_type in ycsb_types:
+        ycsb_dir = f"../data/data_ycsb_{ycsb_type}"
+        if not os.path.exists(ycsb_dir):
+            continue
+            
+        label = f"{ycsb_type.upper()}"
+        data[label] = {}
+        
+        for hash_type in all_hash_types:
+            thread_dir = os.path.join(ycsb_dir, hash_type, "224")
+            if not os.path.exists(thread_dir):
+                continue
+            
+            iops_values = []
+            for file_name in os.listdir(thread_dir):
+                if file_name.startswith("out"):
+                    file_path = os.path.join(thread_dir, file_name)
+                    iops = extract_iops(file_path)
+                    if iops:
+                        iops_values.append(iops)
+            
+            if iops_values:
+                avg_iops = np.mean(iops_values)
+                data[label][hash_type] = avg_iops
+    
+    # 设置柱状图参数
+    n_hash_types = 4 # len(all_hash_types) # RACE and RACE-Partitioned share the same offset
+    bar_width = 0.2  # Make bars narrower
+    opacity = 1.0
+    index = np.arange(len(data.keys()))
+    
+    # 设置网格线在柱子下方
+    ax.set_axisbelow(True)
+    
+    # 计算每组柱状图的偏移量
+    offsets = np.linspace(-(n_hash_types-1)*bar_width/2, (n_hash_types-1)*bar_width/2, n_hash_types)
+    
+    # 绘制柱状图
+    for i, hash_type in enumerate(all_hash_types):
+        values = []
+        for label in data.keys():
+            values.append(data[label].get(hash_type, 0))
+        
+        offset_idx = i - 1 if i > 0 else 0 # RACE and RACE-Partitioned share the same offset
+        position = index + offsets[offset_idx]
+        print(i, hash_type, position, values)
+        ax.bar(position, values, bar_width,
+               color=colors[hash_type],
+               edgecolor='black',
+               lw=1.2,
+               hatch=hatches[hash_type],
+               label=hash_type_to_label(hash_type))
+    
+    # 设置图表属性
+    ax.set_xlabel('YCSB Workload')
+    ax.set_ylabel('Throughput (Kops)')
     ax.set_title('YCSB Benchmarks')
-    # 添加占位符，后续实现具体绘图逻辑
+    ax.set_xticks(index)
+    ax.set_xticklabels(data.keys(), rotation=0)
+    
+    # 优化Y轴刻度显示
+    def thousands_formatter(x, pos):
+        return f'{int(x):,}'
+    
+    ax.yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
+    
+    # 添加网格线
+    ax.grid(axis='y', linestyle='-.')
 
 def plot_variable_kv(ax):
     ax.text(0.5, 0.5, 'Variable Length KV\n(WIP)', 
@@ -168,8 +272,35 @@ if __name__ == "__main__":
     # Fig 4: 分解
     plot_decomposition(axs[3])
 
-    handles, labels = axs[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=4, frameon=False)
+    # handles, labels = axs[0].get_legend_handles_labels()
+    # fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=4, frameon=False)
+
+    # 收集所有子图的图例信息
+    all_handles = []
+    all_labels = []
+
+    # 遍历前两个子图（包含实际数据的子图）
+    for ax in axs[:2]:
+        handles, labels = ax.get_legend_handles_labels()
+        for h, l in zip(handles, labels):
+            if l not in all_labels:  # 避免重复
+                all_handles.append(h)
+                all_labels.append(l)
+
+    # 按照自定义顺序排序图例
+    ordered_handles = []
+    ordered_labels = []
+    # 按照期望的顺序添加标签和句柄
+    preferred_order = ["RACE", "RACE-Partitioned", "Plush", "SepHash", "DREAM"]
+    for label in preferred_order:
+        if label in all_labels:
+            idx = all_labels.index(label)
+            ordered_handles.append(all_handles[idx])
+            ordered_labels.append(label)
+
+    # 创建全局图例，使用排序后的图例元素
+    fig.legend(ordered_handles, ordered_labels, loc='upper center', 
+            bbox_to_anchor=(0.5, 1.05), ncol=5, frameon=False)
     
     # 调整整体布局
     plt.tight_layout()
