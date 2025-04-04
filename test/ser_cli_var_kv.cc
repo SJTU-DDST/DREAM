@@ -14,8 +14,11 @@
 #include "split_search_fptable.h"
 #include <set>
 #include <stdint.h>
+#include <barrier>
 #define ORDERED_INSERT
-// #define ALLOW_KEY_OVERLAP
+#define ALLOW_KEY_OVERLAP
+#define FIXED_LOAD_SETUP
+#define ONLY_FIRST_CORO_START
 Config config;
 uint64_t load_num;
 using ClientType = RACE::Client;
@@ -37,11 +40,21 @@ void GenKey(uint64_t key, uint64_t *tmp_key)
         tmp_key[i] = data_key;
 }
 
+std::unique_ptr<std::barrier<>> barrier;
+
 template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
+    barrier->arrive_and_wait();
+#ifdef ONLY_FIRST_CORO_START
+    if (cli_id == 0 && coro_id == 0)
+        co_await cli->start(config.num_machine);
+    barrier->arrive_and_wait();
+#else
     co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+#endif
+
     uint64_t tmp_key[key_len];
     Slice key, value;
     std::string tmp_value = std::string(value_len, '1');
@@ -49,14 +62,75 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
     value.data = (char *)tmp_value.data();
     key.len = key_len * sizeof(uint64_t);
     key.data = (char *)tmp_key;
+
+#ifdef FIXED_LOAD_SETUP
+    // Fixed setup: 1 machine, 16 clients, 1 coroutine
+    const uint64_t fixed_num_machine = 1;
+    const uint64_t fixed_num_cli = std::min(config.num_cli, 16ul);
+    const uint64_t fixed_num_coro = 1;
+    uint64_t num_op = load_num / (fixed_num_machine * fixed_num_cli * fixed_num_coro);
+    // #ifdef ALLOW_KEY_OVERLAP
+    //     Generator *gen = new seq_gen(load_num);
+    // #else
+    Generator *gen = new seq_gen(num_op);
+    // #endif
+    xoshiro256pp key_chooser;
+
+    if (config.machine_id == 0 && coro_id == 0 && cli_id < fixed_num_cli)
+    {
+        for (uint64_t i = 0; i < num_op; i++)
+        {
+            if (i % 100000 == 0)
+                log_err("cli_id:%lu coro_id:%lu Load Progress: %lu/%lu", cli_id, coro_id, i, num_op);
+            // #ifdef ALLOW_KEY_OVERLAP // Plush?
+            //             GenKey(gen->operator()(key_chooser()), tmp_key);
+            // #else
+            GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + gen->operator()(key_chooser()),
+                   tmp_key);
+            // #endif
+            // log_err("cli_id:%lu coro_id:%lu insert key:%lu", cli_id, coro_id, tmp_key[0]);
+            co_await cli->insert(&key, &value);
+        }
+    }
+#else
+    // Original version
     uint64_t num_op = load_num / (config.num_machine * config.num_cli * config.num_coro);
+    // #ifdef ALLOW_KEY_OVERLAP
+    //     Generator *gen = new seq_gen(load_num);
+    // #else
+    Generator *gen = new seq_gen(num_op);
+    // #endif
+    xoshiro256pp key_chooser;
     for (uint64_t i = 0; i < num_op; i++)
     {
-        GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + i,
+        if (i % 100000 == 0)
+            log_err("cli_id:%lu coro_id:%lu Load Progress: %lu/%lu", cli_id, coro_id, i, num_op);
+        // #ifdef ALLOW_KEY_OVERLAP
+        //         GenKey(gen->operator()(key_chooser()), tmp_key);
+        // #else
+        GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + gen->operator()(key_chooser()),
                tmp_key);
+        // #endif
         co_await cli->insert(&key, &value);
     }
+#endif
+
+    // All threads wait at barrier before stopping
+    barrier->arrive_and_wait();
+
+#ifdef ONLY_FIRST_CORO_START
+    // Only first coroutine in each machine calls stop
+    if (cli_id == 0 && coro_id == 0)
+    {
+        co_await cli->stop();
+    }
+
+    // Wait for stop to complete before any thread returns
+    barrier->arrive_and_wait();
+#else
     co_await cli->stop();
+#endif
+
     co_return;
 }
 
@@ -64,7 +138,14 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 {
+    barrier->arrive_and_wait();
+#ifdef ONLY_FIRST_CORO_START
+    if (cli_id == 0 && coro_id == 0)
+        co_await cli->start(config.num_machine);
+    barrier->arrive_and_wait();
+#else
     co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+#endif
     uint64_t tmp_key[key_len];
     char buffer[8192];
     Slice key, value, ret_value, update_value;
@@ -88,15 +169,15 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
     xoshiro256pp op_chooser;
     xoshiro256pp key_chooser;
     uint64_t num_op = config.num_op / (config.num_machine * config.num_cli * config.num_coro);
-    uint64_t load_avr = load_num / (config.num_machine * config.num_cli * config.num_coro);
-    // uint64_t load_avr = num_op;
+    // uint64_t load_avr = load_num / (config.num_machine * config.num_cli * config.num_coro);
+    uint64_t load_avr = num_op;
     for (uint64_t i = 0; i < num_op; i++)
     {
         op_frac = op_chooser();
         if (op_frac < config.insert_frac)
         {
 #ifdef ALLOW_KEY_OVERLAP
-            GenKey(gen->operator()(key_chooser()), tmp_key);
+            GenKey(load_num + gen->operator()(key_chooser()), tmp_key);
 #else
             GenKey(load_num +
                        (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
@@ -174,13 +255,27 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
             // }
         }
     }
+    // All threads wait at barrier before stopping
+    barrier->arrive_and_wait();
+#ifdef ONLY_FIRST_CORO_START
+    // Only first coroutine in each machine calls stop
+    if (cli_id == 0 && coro_id == 0)
+    {
+        co_await cli->stop();
+    }
+
+    // Wait for stop to complete before any thread returns
+    barrier->arrive_and_wait();
+#else
     co_await cli->stop();
+#endif
     co_return;
 }
 
 int main(int argc, char *argv[])
 {
     config.ParseArg(argc, argv);
+    barrier = std::make_unique<std::barrier<>>(config.num_cli * config.num_coro);
     load_num = config.load_num;
     if (config.is_server)
     {
@@ -192,7 +287,7 @@ int main(int argc, char *argv[])
     {
         uint64_t cbuf_size = (1ul << 20) * 500;
         char *mem_buf = (char *)malloc(cbuf_size * (config.num_cli * config.num_coro + 1));
-        rdma_dev dev("mlx5_0", 1, config.gid_idx);
+        rdma_dev dev(nullptr, 1, config.gid_idx);
         std::vector<ibv_mr *> lmrs(config.num_cli * config.num_coro + 1, nullptr);
         std::vector<rdma_client *> rdma_clis(config.num_cli + 1, nullptr);
         std::vector<rdma_conn *> rdma_conns(config.num_cli + 1, nullptr);
@@ -228,20 +323,20 @@ int main(int argc, char *argv[])
 
         if (config.machine_id == 0 && rehash_flag)
         {
-            rdma_clis[config.num_cli] =
-                new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
-            rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
+            // rdma_clis[config.num_cli] =
+            //     new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
+            // rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
+            // rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
 
-            lmrs[config.num_cli * config.num_coro] =
-                dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
-            ClientType *rehash_cli = new ClientType(
-                config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
-                rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
-            auto th = [&](rdma_client *rdma_cli) {
-                // rdma_cli->run(rehash_cli->rehash(exit_flag));
-            };
-            ths[config.num_cli] = std::thread(th, rdma_clis[config.num_cli]);
+            // lmrs[config.num_cli * config.num_coro] =
+            //     dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
+            // ClientType *rehash_cli = new ClientType(
+            //     config, lmrs[config.num_cli * config.num_coro], rdma_clis[config.num_cli], rdma_conns[config.num_cli],
+            //     rdma_wowait_conns[config.num_cli], config.machine_id, config.num_cli, config.num_coro);
+            // auto th = [&](rdma_client *rdma_cli) {
+            //     // rdma_cli->run(rehash_cli->rehash(exit_flag));
+            // };
+            // ths[config.num_cli] = std::thread(th, rdma_clis[config.num_cli]);
         }
 
         printf("Load start\n");
