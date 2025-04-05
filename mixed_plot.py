@@ -193,7 +193,7 @@ def plot_mixed(ax):
     # 设置图表属性
     ax.set_xlabel('Insert/Search Ratio')
     ax.set_ylabel('Throughput (Kops)')
-    ax.set_title('Hybrid Workloads')
+    ax.set_title('(a) Hybrid Workloads')
     ax.set_xticks(index)
     ax.set_xticklabels(data.keys(), rotation=0)
     
@@ -266,8 +266,8 @@ def plot_ycsb(ax):
         for label in data.keys():
             values.append(data[label].get(hash_type, 0))
         
-        offset_idx = i - 1 if i > 0 else 0 # RACE and RACE-Partitioned share the same offset
-        position = index + offsets[offset_idx]
+        # offset_idx = i - 1 if i > 0 else 0 # RACE and RACE-Partitioned share the same offset
+        position = index + offsets[i]
         ax.bar(position, values, bar_width,
                color=colors[hash_type],
                edgecolor='black',
@@ -298,7 +298,7 @@ def plot_ycsb(ax):
     # 设置图表属性
     ax.set_xlabel('YCSB Workload')
     ax.set_ylabel('Throughput (Kops)')
-    ax.set_title('YCSB Benchmarks')
+    ax.set_title('(b) YCSB Benchmarks')
     ax.set_xticks(index)
     ax.set_xticklabels(data.keys(), rotation=0)
     
@@ -388,7 +388,7 @@ def plot_variable_kv(ax):
     # 设置图表属性
     ax.set_xlabel('KV Size (bytes)')
     ax.set_ylabel('Average Latency (μs)')
-    ax.set_title('Variable KV Sizes')
+    ax.set_title('(c) Variable KV Sizes')
     
     # Set x-tick positions and labels manually
     ax.set_xticks(list(range(len(sizes))))
@@ -496,7 +496,7 @@ def plot_breakdown(ax):
     # 设置图表属性
     ax.set_xlabel('Number of Threads')
     ax.set_ylabel('Throughput (Kops)')
-    ax.set_title('Breakdown Analysis')
+    ax.set_title('(d) Breakdown Analysis')
     
     # 设置x轴刻度为均匀间隔
     ax.set_xticks(x_positions)
@@ -549,7 +549,7 @@ if __name__ == "__main__":
     # 由于我们有4个子图，每个占据25%的宽度，前两个子图总共占50%的宽度
     # 所以中心位置应该在25%的位置(0.25)
     fig.legend(ordered_handles, ordered_labels, loc='upper center', 
-            bbox_to_anchor=(0.275, 1.25), ncol=2, frameon=True)
+            bbox_to_anchor=(0.275, 1.21), ncol=2, frameon=True)
     
     # 为第三张子图（变长KV）创建单独的图例
     handles3, labels3 = axs[2].get_legend_handles_labels()
