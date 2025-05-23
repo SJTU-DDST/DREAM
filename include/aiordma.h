@@ -42,7 +42,7 @@ enum class ConnType : uint8_t
 struct ConnInfo
 {
     ConnType conn_type;
-    uint64_t segloc;
+    uint64_t client_sock;
 };
 
 constexpr uint64_t SEGMENT_SIZE = 1024;
@@ -135,7 +135,7 @@ struct CurSegMeta
     uint64_t local_depth : LOCAL_DEPTH_BITS; // 将 local_depth 的位数减少到 55 位
     uintptr_t main_seg_ptr;
     uintptr_t main_seg_len;
-    FpBitmapType fp_bitmap[FP_BITMAP_LENGTH]; // 16*64 = 1024,代表10bits fp的出现情况；整个CurSeg大约会出现（1024/8=128）个FP，因此能极大的减少search对CurSeg的访问
+    FpBitmapType fp_bitmap[FP_BITMAP_LENGTH]; // 16*64 = 1024,代表10bits fp的出现情况；整个CurSeg大约会出现（1024/8=128）个FP，因此能极大的减少search对CurSeg的访问 // FIXME: 现在我们有16bits FP, FP_BITMAP_LENGTH应该是65536？不过太大可能会增大FPTable
     uint32_t srq_num; // XRC SRQ number
 
     void print(std::string desc = "")
@@ -554,7 +554,7 @@ public:
      * @return rdma_conn* 建立的RDMA连接
      */
     rdma_conn *connect(const char *host = rdma_default_host, int port = rdma_default_port, ConnInfo conn_info = {ConnType::Normal, 0});
-
+    rdma_conn *reconnect(int sock, ConnInfo conn_info = {ConnType::Normal, 0});
 #ifdef ENABLE_DOCA_DMA
     void enable_dma(uint32_t workq_size = dma_default_workq_size, size_t buf_inv_size = dma_default_inv_buf_size);
 #endif
@@ -736,6 +736,37 @@ public:
 public:
     rdma_conn(rdma_worker *w, int _sock, ConnInfo conn_info = {ConnType::Normal, 0});
     ~rdma_conn();
+
+    // Returns true if QP is in error state, false otherwise
+    bool check_qp_state() {
+        ibv_qp_attr attr;
+        ibv_qp_init_attr init_attr;
+        int ret = ibv_query_qp(qp, &attr,
+            IBV_QP_STATE | IBV_QP_CUR_STATE | IBV_QP_ACCESS_FLAGS | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY,
+            &init_attr);
+        if (ret == 0) {
+            auto qp_state_to_str = [](int state) {
+                switch (state) {
+                    case IBV_QPS_RESET: return "RESET";
+                    case IBV_QPS_INIT: return "INIT";
+                    case IBV_QPS_RTR: return "RTR";
+                    case IBV_QPS_RTS: return "RTS";
+                    case IBV_QPS_SQD: return "SQD";
+                    case IBV_QPS_SQE: return "SQE";
+                    case IBV_QPS_ERR: return "ERR";
+                    default: return "UNKNOWN";
+                }
+            };
+            log_err("QP状态: %s, %s, %d, %d, %d, %d",
+                qp_state_to_str(attr.qp_state),
+                qp_state_to_str(attr.cur_qp_state),
+                attr.qp_access_flags, attr.pkey_index, attr.port_num, attr.qkey);
+            return attr.qp_state == IBV_QPS_ERR || attr.cur_qp_state == IBV_QPS_ERR;
+        } else {
+            log_err("ibv_query_qp失败");
+            return true;
+        }
+    }
 
     auto yield() { return worker->yield(); }
 

@@ -18,10 +18,16 @@
 #include <set>
 #include <stdint.h>
 #include <barrier>
+#include <csignal>
 #define ORDERED_INSERT
-#define ALLOW_KEY_OVERLAP
-#define FIXED_LOAD_SETUP
-#define ONLY_FIRST_CORO_START
+#define ALLOW_KEY_OVERLAP // 不同客户端之间允许key重叠，默认打开，只有RACE-Partitioned才关闭
+#define FIXED_LOAD_SETUP // 最多16个线程执行load，缓解load线程太多导致争用太多的问题
+#define ONLY_FIRST_CORO_START // 每台机器只有第一个线程的第一个协程调用cli->start和cli->stop，机器内部使用本地的barrier协调，减少网络开销
+// #define SPLIT_DEV_NUMA // 打开此宏启用多网卡+NUMA亲和
+#ifdef SPLIT_DEV_NUMA
+#include <numa.h>
+#include <pthread.h>
+#endif
 Config config;
 uint64_t load_num;
 
@@ -279,6 +285,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 
 int main(int argc, char *argv[])
 {
+    signal(SIGPIPE, SIG_IGN);
     config.ParseArg(argc, argv);
     barrier = std::make_unique<std::barrier<>>(config.num_cli * config.num_coro);
     load_num = config.load_num;
@@ -292,7 +299,13 @@ int main(int argc, char *argv[])
     {
         uint64_t cbuf_size = (1ul << 20) * 500;
         char *mem_buf = (char *)malloc(cbuf_size * (config.num_cli * config.num_coro + 1));
+#ifdef SPLIT_DEV_NUMA
+        rdma_dev dev0("mlx5_0", 1, config.gid_idx);
+        rdma_dev dev1("mlx5_1", 1, config.gid_idx);
+#else
         rdma_dev dev(nullptr, 1, config.gid_idx);
+#endif
+        
         std::vector<ibv_mr *> lmrs(config.num_cli * config.num_coro + 1, nullptr);
         std::vector<rdma_client *> rdma_clis(config.num_cli + 1, nullptr);
         std::vector<rdma_conn *> rdma_conns(config.num_cli + 1, nullptr);
@@ -303,15 +316,22 @@ int main(int argc, char *argv[])
 
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
-            rdma_clis[i] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
+#ifdef SPLIT_DEV_NUMA
+            int half = config.num_cli / 2;
+            int numa_node = (i < half) ? 0 : 1;
+            rdma_dev &my_dev = (i < half) ? dev0 : dev1;
+#else
+            rdma_dev &my_dev = dev;
+#endif
+            rdma_clis[i] = new rdma_client(my_dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
             rdma_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
             assert(rdma_conns[i] != nullptr);
-            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Signal, 0}); // use wowait conn for signal
+            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Signal, 0});
             assert(rdma_wowait_conns[i] != nullptr);
             for (uint64_t j = 0; j < config.num_coro; j++)
             {
                 lmrs[i * config.num_coro + j] =
-                    dev.create_mr(cbuf_size, mem_buf + cbuf_size * (i * config.num_coro + j));
+                    my_dev.create_mr(cbuf_size, mem_buf + cbuf_size * (i * config.num_coro + j));
                 BasicDB *cli;
                 cli = new ClientType(config, lmrs[i * config.num_coro + j], rdma_clis[i], rdma_conns[i],
                                      rdma_wowait_conns[i], config.machine_id, i, j);
@@ -349,6 +369,11 @@ int main(int argc, char *argv[])
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
             auto th = [&](rdma_client *rdma_cli, uint64_t cli_id) {
+#ifdef SPLIT_DEV_NUMA
+                int half = config.num_cli / 2;
+                int numa_node = (cli_id < half) ? 0 : 1;
+                numa_run_on_node(numa_node);
+#endif
                 std::vector<task<>> tasks;
                 for (uint64_t j = 0; j < config.num_coro; j++)
                 {
@@ -400,6 +425,11 @@ int main(int argc, char *argv[])
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
             auto th = [&](rdma_client *rdma_cli, uint64_t cli_id) {
+#ifdef SPLIT_DEV_NUMA
+                int half = config.num_cli / 2;
+                int numa_node = (cli_id < half) ? 0 : 1;
+                numa_run_on_node(numa_node);
+#endif
                 std::vector<task<>> tasks;
                 for (uint64_t j = 0; j < config.num_coro; j++)
                 {

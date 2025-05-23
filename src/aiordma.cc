@@ -17,7 +17,7 @@
 #endif
 
 const ibv_qp_cap sr_qp_cap = {
-    .max_send_wr = 64,
+    .max_send_wr = 1024,
     .max_recv_wr = 1024, // 32,
     .max_send_sge = 1,
     .max_recv_sge = 1,
@@ -25,7 +25,7 @@ const ibv_qp_cap sr_qp_cap = {
 };
 
 const ibv_qp_cap so_qp_cap = {
-    .max_send_wr = 64,
+    .max_send_wr = 1024,
     .max_recv_wr = 0,
     .max_send_sge = 1,
     .max_recv_sge = 1,
@@ -103,6 +103,7 @@ enum
     rdma_exchange_proto_invaild,
     rdma_exchange_proto_setup,
     rdma_exchange_proto_ready,
+    rdma_exchange_proto_reconnect,
 };
 
 struct __rdma_exchange_t
@@ -591,19 +592,19 @@ void rdma_worker::print_running_coros()
         if (cor->ctx != 0)
         {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cor->start_time).count();
-            if (elapsed >= 10)
-            {
-                log_err("终止超时coro ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed);
-                cor->coro_state |= (coro_state_error | coro_state_ready);
-                if (cor->coro_state & coro_state_inited)
-                    cor->resume_handler();
-            }
-            std::string location = std::string(cor->location.file_name()) + ":" + std::to_string(cor->location.line());
-            if (elapsed >= 5)
-            {
-                // location_count[location]++;
-                cor->print("运行超时");
-            }
+            // if (elapsed >= 10)
+            // {
+            //     log_err("终止超时coro ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed);
+            //     cor->coro_state |= (coro_state_error | coro_state_ready);
+            //     if (cor->coro_state & coro_state_inited)
+            //         cor->resume_handler();
+            // }
+            // std::string location = std::string(cor->location.file_name()) + ":" + std::to_string(cor->location.line());
+            // if (elapsed >= 5)
+            // {
+            //     // location_count[location]++;
+            //     cor->print(std::format("运行超时，协程ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed));
+            // }
         }
     }
 
@@ -786,7 +787,7 @@ void rdma_worker::worker_loop()
                         wr.wr_id = wr_wo_await;
                         assert_check(0 == ibv_post_srq_recv(srqs[segloc], &wr, &bad));
                     }
-                    log_test("收到IMM，为srqs[%u]:%p发布%d个RECV, qp_num: %u", segloc, srqs[segloc], SLOT_PER_SEG, wc.qp_num);
+                    // log_err("收到IMM，为srqs[%u]:%p发布%d个RECV, qp_num: %u", segloc, srqs[segloc], SLOT_PER_SEG, wc.qp_num);
                 }
                 if (signal_srq) {
                     fill_recv_wr(&wr, &sge, reinterpret_cast<CurSeg *>(dir->segs[0].cur_seg_ptr)->slots, sizeof(Slot), dev.seg_mr->lkey); // 象征性加上sizeof(Slot)，必须是合法地址不能是nullptr？
@@ -811,7 +812,7 @@ void rdma_worker::worker_loop()
                 log_err("got bad completion with status: 0x%x, vendor syndrome: 0x%x", wc.status, wc.vendor_err);
                 cor->coro_state |= coro_state_error;
                 cor->print("错误");
-                assert_require(wc.status == IBV_WC_SUCCESS); // TODO: 细粒度合并
+                // assert_require(wc.status == IBV_WC_SUCCESS); // TODO: 细粒度合并
             }
             if (cor->coro_state & coro_state_inited)
             {
@@ -946,18 +947,19 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                         while ((recv_len += recv(accepted_sock, &conn_info + recv_len, sizeof(conn_info) - recv_len, 0)) < sizeof(conn_info))
                             ;
                         assert_require(recv_len == sizeof(conn_info));
-                        assert_require(conn_info.segloc < 100000);
+                        assert_require(conn_info.client_sock < 100000);
 #endif
                         auto worker = workers[accepted_sock % worker_num];
                         if (conn_info.conn_type == ConnType::XRC_SEND) {
                             // log_err("接收到XRC_SEND的连接，类型更改为XRC_RECV");
                             conn_info.conn_type = ConnType::XRC_RECV;
                         }
+                        // log_err("服务端接收到conn_info: %p, conn_type: %d, client_sock: %lu", &conn_info, conn_info.conn_type, conn_info.client_sock);
                         auto conn = new rdma_conn(worker, accepted_sock, conn_info); // IMPORTANT: 服务器创建QP
                         assert_require(conn);
                         sk2conn[accepted_sock] = conn;
 #if RDMA_SIGNAL
-                        log_test("创建qp_num: %d, 是否使用signal_srq: %d, is_signal_conn: %d, segloc: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, conn_info.conn_type == ConnType::Signal, conn_info.segloc);
+                        log_test("创建qp_num: %d, 是否使用signal_srq: %d, is_signal_conn: %d, client_sock: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, conn_info.conn_type == ConnType::Signal, conn_info.client_sock);
 #endif
                     }
                     else
@@ -972,6 +974,7 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
 // #endif
                                 delete conn;
                             sk2conn.erase(sk);
+                            // log_err("thread: 关闭socket: %d, recv_len: %d", sk, recv_len);
                             close(sk);
                             select_list.del(sk);
                             log_info("connection closed: %d", sk);
@@ -994,6 +997,35 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                                 select_list.del(sk);
                                 conn->sock = -1;
 #endif
+                                break;
+                            case rdma_exchange_proto_reconnect:
+                            {
+                                int accepted_sock = conn->sock;
+                                log_err("收到reconnect请求, sk: %d, accepted_sock: %d", sk, accepted_sock);
+                                conn->sock = -1;
+                                delete conn;
+                                sk2conn.erase(sk);
+
+                                ConnInfo conn_info = {ConnType::Normal, 0};
+#if RDMA_SIGNAL
+                                // 接收 conn_info
+                                size_t recv_len = 0;
+                                while ((recv_len += recv(accepted_sock, &conn_info + recv_len, sizeof(conn_info) - recv_len, 0)) < sizeof(conn_info))
+                                    ;
+                                assert_require(recv_len == sizeof(conn_info));
+                                assert_require(conn_info.client_sock < 100000);
+#endif
+                                auto worker = workers[accepted_sock % worker_num];
+                                if (conn_info.conn_type == ConnType::XRC_SEND) {
+                                    // log_err("接收到XRC_SEND的连接，类型更改为XRC_RECV");
+                                    conn_info.conn_type = ConnType::XRC_RECV;
+                                }
+                                log_err("服务端接收到conn_info: %p, conn_type: %d, client_sock: %lu", &conn_info, conn_info.conn_type, conn_info.client_sock);
+                                conn = new rdma_conn(worker, accepted_sock, conn_info); // IMPORTANT: 服务器创建QP
+                                log_err("reconnect: 创建rdma_conn成功, sk: %d, conn: %p", accepted_sock, conn);
+                                assert_require(conn);
+                                sk2conn[accepted_sock] = conn;
+                            }
                                 break;
 
                             default:
@@ -1041,6 +1073,7 @@ rdma_conn *rdma_worker::connect(const char *host, int port, ConnInfo conn_info)
     log_info("socket connected");
 
 #if RDMA_SIGNAL
+    conn_info.client_sock = sock;
     assert_require(send(sock, &conn_info, sizeof(conn_info), 0) == sizeof(conn_info));
 #endif
 
@@ -1050,28 +1083,75 @@ rdma_conn *rdma_worker::connect(const char *host, int port, ConnInfo conn_info)
     size_t recv_len = 0;
     while ((recv_len += recv(sock, recv_buf + recv_len, rdma_sock_recv_buf_size - recv_len, 0)) < sizeof(__rdma_exchange_t))
         ;
+    if (recv_len == -1)
+    {
+        log_err("recv error, errno: %s", strerror(errno));
+        close(sock);
+        return nullptr;
+    }
+
     log_info("RTR -> RTS");
     conn->handle_recv_setup(recv_buf, recv_len, conn_info);
     recv_len = 0;
     while ((recv_len += recv(sock, recv_buf + recv_len, rdma_sock_recv_buf_size - recv_len, 0)) < sizeof(uint16_t))
         ;
+    if (recv_len == -1)
+    {
+        log_err("recv error, errno: %s", strerror(errno));
+        close(sock);
+        return nullptr;
+    }
 
     log_info("connect success");
-// #if CLOSE_SOCKET
-//     if (segloc > 0)
-//     {
-//         close(sock);
-//         conn->sock = -1;
-//     }
-// #endif
+    return conn;
+}
+
+// 新增：复用已有sock进行连接
+rdma_conn *rdma_worker::reconnect(int sock, ConnInfo conn_info)
+{
+    uint8_t recv_buf[rdma_sock_recv_buf_size];
+
+#if RDMA_SIGNAL
+    conn_info.client_sock = sock;
+    // log_err("reconnect: 客户端调用send发送conn_info, sock: %d, conn_info: %p", sock, &conn_info);
+    assert_require(send(sock, &conn_info, sizeof(conn_info), 0) == sizeof(conn_info));
+#endif
+
+    auto conn = new rdma_conn(this, sock, conn_info); // IMPORTANT: 客户端创建QP
+    if (!conn)
+        log_err("failed to alloc conn");
+    size_t recv_len = 0;
+    // log_err("reconnect: 客户端第一次调用recv, sock: %d, recv_len: %lu", sock, recv_len);
+    while ((recv_len += recv(sock, recv_buf + recv_len, rdma_sock_recv_buf_size - recv_len, 0)) < sizeof(__rdma_exchange_t))
+        ;
+    // log_err("reconnect: 客户端第一次recv完成, sock: %d, recv_len: %lu", sock, recv_len);
+    if (recv_len == -1)
+    {
+        log_err("reconnect: recv error, errno: %s", strerror(errno));
+        close(sock);
+        return nullptr;
+    }
+
+    log_info("reconnect: RTR -> RTS");
+    conn->handle_recv_setup(recv_buf, recv_len, conn_info);
+    recv_len = 0;
+    // log_err("reconnect: 客户端第二次调用recv, sock: %d, recv_len: %lu", sock, recv_len);
+    while ((recv_len += recv(sock, recv_buf + recv_len, rdma_sock_recv_buf_size - recv_len, 0)) < sizeof(uint16_t))
+        ;
+    // log_err("reconnect: 客户端第二次recv完成, sock: %d, recv_len: %lu", sock, recv_len);
+    if (recv_len == -1)
+    {
+        log_err("reconnect: recv error, errno: %s", strerror(errno));
+        close(sock);
+        return nullptr;
+    }
+
+    log_info("reconnect: connect success");
     return conn;
 }
 
 rdma_conn::rdma_conn(rdma_worker *w, int _sock, ConnInfo conn_info)
     : dev(w->dev), worker(w), sock(_sock), conn_id(dev.alloc_conn_id())
-// #if CLOSE_SOCKET
-//       , segloc(segloc)
-// #endif
 {
     {
         if (conn_info.conn_type == ConnType::Normal || conn_info.conn_type == ConnType::Signal) {
@@ -1185,7 +1265,7 @@ void rdma_conn::send_exchange(uint16_t proto, ConnInfo conn_info)
     union ibv_gid local_gid;
     exc.proto = proto;
     exc.conn_info = conn_info;
-    // log_err("send_exchange proto: %d, is_signal_conn: %d, segloc: %lu", proto, is_signal_conn, segloc);
+    // log_err("send_exchange proto: %d", proto);
     if (proto == rdma_exchange_proto_setup)
     {
         if (dev.gid_idx >= 0)
@@ -1202,6 +1282,10 @@ void rdma_conn::send_exchange(uint16_t proto, ConnInfo conn_info)
         assert_require(::send(sock, &exc, sizeof(__rdma_exchange_t), 0) == sizeof(__rdma_exchange_t));
     }
     else if (proto == rdma_exchange_proto_ready)
+    {
+        assert_require(::send(sock, &exc, sizeof(uint16_t), 0) == sizeof(uint16_t));
+    }
+    else if (proto == rdma_exchange_proto_reconnect)
     {
         assert_require(::send(sock, &exc, sizeof(uint16_t), 0) == sizeof(uint16_t));
     }

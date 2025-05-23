@@ -1,6 +1,13 @@
 #pragma once
 #include <shared_mutex>
 #include "sephash.h"
+enum
+{
+    rdma_exchange_proto_invaild,
+    rdma_exchange_proto_setup,
+    rdma_exchange_proto_ready,
+    rdma_exchange_proto_reconnect,
+};
 
 namespace MYHASH
 {
@@ -20,6 +27,27 @@ namespace MYHASH
         {
             delete xrc_conn;
         }
+        
+        // 销毁并重新创建xrc_conn
+        void recreate_xrc_conn()
+        {
+            static std::mutex recreate_mutex;
+            std::lock_guard<std::mutex> lock(recreate_mutex);
+
+            int sock = xrc_conn->sock;
+            // log_err("销毁并重新创建xrc_conn, sock: %d", xrc_conn->sock);
+            xrc_conn->send_exchange(rdma_exchange_proto_reconnect, {ConnType::XRC_SEND, 0});
+            xrc_conn->sock = -1; // 这样不会销毁sock
+            delete xrc_conn;
+            xrc_conn = nullptr;
+    #if RDMA_SIGNAL
+            // xrc_conn = cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::XRC_SEND, 0});
+            // log_err("cli->reconnect重新创建xrc_conn开始, sock: %d", sock);
+            xrc_conn = cli->reconnect(sock, {ConnType::XRC_SEND, 0});
+            // log_err("cli->reconnect重新创建xrc_conn成功, sock: %d", sock);
+    #endif
+        }
+
         task<> insert(Slice *key, Slice *value);
         task<> update(Slice *key, Slice *value);
         task<> remove(Slice *key);

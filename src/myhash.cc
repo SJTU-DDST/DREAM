@@ -89,10 +89,15 @@ namespace MYHASH
         }
         log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", xrc_conn->qp->qp_num, segloc, seg_meta[segloc].srq_num);
         assert_require(seg_meta[segloc].srq_num > 0);
+        
+        bool is_retry = false;
+Retry_Send:
 #if SPLIT_LOCAL_LOCK
         std::shared_lock<std::shared_mutex> read_lock(segloc_locks[segloc]);
 #endif
 #if CORO_DEBUG
+        if (is_retry)
+            log_err("[%lu:%lu:%lu]重试对segloc:%lu的srq_num:%u第%d次发送slot", cli_id, coro_id, this->key_num, segloc, seg_meta[segloc].srq_num, retry_cnt);
         auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, 
                                        std::source_location::current(), 
                                        std::format("[{}:{}]segloc:{}第{}次SEND slot", 
@@ -103,7 +108,32 @@ namespace MYHASH
 #if SPLIT_LOCAL_LOCK
         read_lock.unlock();
 #endif
-        co_await std::move(send_slot);
+        int success = co_await std::move(send_slot);
+        if (!success)
+        {
+            is_retry = true;
+            retry_cnt++;
+            if (retry_cnt < 10)
+            {
+                if (conn->check_qp_state()) // error
+                {
+                    this->recreate_xrc_conn();
+                    log_err("[%lu:%lu:%lu]对segloc:%lu的srq_num:%u第%d次发送slot失败，准备重试", 
+                            cli_id, coro_id, this->key_num, segloc, seg_meta[segloc].srq_num, retry_cnt);
+                    // sleep(1);
+                }
+                goto Retry_Send;
+            }
+            else
+            {
+                log_err("第%d次发送slot失败，放弃", retry_cnt);
+                co_return;
+            }
+        } else if (is_retry)
+        {
+            log_err("第%d次发送slot重试后成功", retry_cnt);
+        }
+        
         log_test("发送slot到segloc:%lu srq_num:%u完成", segloc, seg_meta[segloc].srq_num);
         // perf.push_perf("send_slot");
         // log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
