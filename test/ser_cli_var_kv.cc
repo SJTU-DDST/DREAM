@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <barrier>
 #include <csignal>
+#include <functional>
 #define ORDERED_INSERT
 #define ALLOW_KEY_OVERLAP // 不同客户端之间允许key重叠，默认打开，只有RACE-Partitioned才关闭
 #define FIXED_LOAD_SETUP // 最多16个线程执行load，缓解load线程太多导致争用太多的问题
@@ -52,17 +53,22 @@ void GenKey(uint64_t key, uint64_t *tmp_key)
 
 std::unique_ptr<std::barrier<>> barrier;
 
+// hash函数用于key路由到server
+inline size_t key_server_hash(uint64_t key, size_t num_server) {
+    return key % num_server;
+}
+
 template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
-task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
+task<> load(std::vector<Client*>& clis, uint64_t cli_id, uint64_t coro_id)
 {
     barrier->arrive_and_wait();
 #ifdef ONLY_FIRST_CORO_START
     if (cli_id == 0 && coro_id == 0)
-        co_await cli->start(config.num_machine);
+        co_await clis[0]->start(config.num_machine);
     barrier->arrive_and_wait();
 #else
-    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+    co_await clis[0]->start(config.num_machine * config.num_cli * config.num_coro);
 #endif
 
     uint64_t tmp_key[key_len];
@@ -72,7 +78,8 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
     value.data = (char *)tmp_value.data();
     key.len = key_len * sizeof(uint64_t);
     key.data = (char *)tmp_key;
-    
+    size_t server_id = key_server_hash(tmp_key[0], clis.size());
+
 #ifdef FIXED_LOAD_SETUP
     // Fixed setup: 1 machine, 16 clients, 1 coroutine
     const uint64_t fixed_num_machine = 1;
@@ -98,7 +105,7 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
                    tmp_key);
 // #endif
             // log_err("cli_id:%lu coro_id:%lu insert key:%lu", cli_id, coro_id, tmp_key[0]);
-            co_await cli->insert(&key, &value);
+            co_await clis[server_id]->insert(&key, &value);
         }
     }
 #else
@@ -120,7 +127,7 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
         GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) * num_op + gen->operator()(key_chooser()),
                tmp_key);
 // #endif
-        co_await cli->insert(&key, &value);
+        co_await clis[server_id]->insert(&key, &value);
     }
 #endif
 
@@ -130,13 +137,13 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 #ifdef ONLY_FIRST_CORO_START
     // Only first coroutine in each machine calls stop
     if (cli_id == 0 && coro_id == 0) {
-        co_await cli->stop();
+        co_await clis[0]->stop();
     }
     
     // Wait for stop to complete before any thread returns
     barrier->arrive_and_wait();
 #else
-    co_await cli->stop();
+    co_await clis[0]->stop();
 #endif
     
     co_return;
@@ -144,15 +151,15 @@ task<> load(Client *cli, uint64_t cli_id, uint64_t coro_id)
 
 template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
-task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
+task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t coro_id)
 {
     barrier->arrive_and_wait();
 #ifdef ONLY_FIRST_CORO_START
     if (cli_id == 0 && coro_id == 0)
-        co_await cli->start(config.num_machine);
+        co_await clis[0]->start(config.num_machine);
     barrier->arrive_and_wait();
 #else
-    co_await cli->start(config.num_machine * config.num_cli * config.num_coro);
+    co_await clis[0]->start(config.num_machine * config.num_cli * config.num_coro);
 #endif
     uint64_t tmp_key[key_len];
     char buffer[8192];
@@ -170,6 +177,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
 
     key.len = key_len * sizeof(uint64_t);
     key.data = (char *)&tmp_key;
+    size_t server_id = key_server_hash(tmp_key[0], clis.size());
 
     double op_frac;
     double read_frac = config.insert_frac + config.read_frac;
@@ -196,7 +204,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
                    tmp_key);
                 //    log_err("cli_id:%lu coro_id:%lu insert key:%lu", cli_id, coro_id, tmp_key[0]);
 #endif
-            co_await cli->insert(&key, &value);
+            co_await clis[server_id]->insert(&key, &value);
         }
         else if (op_frac < read_frac)
         {
@@ -209,7 +217,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
                        gen->operator()(key_chooser()),
                    tmp_key);
 #endif
-            co_await cli->search(&key, &ret_value);
+            co_await clis[server_id]->search(&key, &ret_value);
             // if (ret_value.len != value.len || memcmp(ret_value.data, value.data, value.len) != 0)
             // {
             //     log_err("[%lu:%lu]wrong value for key:%lu with value:%s expected:%s", cli_id, coro_id, tmp_key[0],
@@ -228,7 +236,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
                        gen->operator()(key_chooser()),
                    tmp_key);
 #endif
-            co_await cli->update(&key, &update_value);
+            co_await clis[server_id]->update(&key, &update_value);
             // auto [slot_ptr, slot] = co_await cli->search(&key, &ret_value);
             // if (slot_ptr == 0ull)
             //     log_err("[%lu:%lu]update for key:%lu result in loss", cli_id, coro_id, tmp_key);
@@ -250,7 +258,7 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
                        gen->operator()(key_chooser()),
                    tmp_key);
 #endif
-            co_await cli->remove(&key);
+            co_await clis[server_id]->remove(&key);
             // uint64_t cnt = 0;
             // while(true){
             //     auto [slot_ptr, slot] = co_await cli->search(&key, &ret_value);
@@ -272,13 +280,13 @@ task<> run(Generator *gen, Client *cli, uint64_t cli_id, uint64_t coro_id)
     // Only first coroutine in each machine calls stop
     if (cli_id == 0 && coro_id == 0)
     {
-        co_await cli->stop();
+        co_await clis[0]->stop();
     }
 
     // Wait for stop to complete before any thread returns
     barrier->arrive_and_wait();
 #else
-    co_await cli->stop();
+    co_await clis[0]->stop();
 #endif
     co_return;
 }
@@ -297,21 +305,21 @@ int main(int argc, char *argv[])
     }
     else
     {
+        uint64_t num_server = config.server_ips.size();
         uint64_t cbuf_size = (1ul << 20) * 500;
-        char *mem_buf = (char *)malloc(cbuf_size * (config.num_cli * config.num_coro + 1));
+        // 修正：mem_buf分配空间要乘以num_server，保证每个lmr的地址唯一
+        char *mem_buf = (char *)malloc(cbuf_size * (config.num_cli * config.num_coro * num_server + 1));
 #ifdef SPLIT_DEV_NUMA
         rdma_dev dev0("mlx5_0", 1, config.gid_idx);
         rdma_dev dev1("mlx5_1", 1, config.gid_idx);
 #else
         rdma_dev dev(nullptr, 1, config.gid_idx);
 #endif
-        
-        std::vector<ibv_mr *> lmrs(config.num_cli * config.num_coro + 1, nullptr);
-        std::vector<rdma_client *> rdma_clis(config.num_cli + 1, nullptr);
-        std::vector<rdma_conn *> rdma_conns(config.num_cli + 1, nullptr);
-        std::vector<rdma_conn *> rdma_wowait_conns(config.num_cli + 1, nullptr);
-        std::mutex dir_lock;
-        std::vector<BasicDB *> clis;
+        std::vector<std::vector<ibv_mr *>> lmrs(config.num_cli * config.num_coro, std::vector<ibv_mr *>(num_server, nullptr));
+        std::vector<rdma_client *> rdma_clis(config.num_cli, nullptr);
+        std::vector<std::vector<rdma_conn *>> rdma_conns(config.num_cli, std::vector<rdma_conn *>(num_server, nullptr));
+        std::vector<std::vector<rdma_conn *>> rdma_wowait_conns(config.num_cli, std::vector<rdma_conn *>(num_server, nullptr));
+        std::vector<std::vector<BasicDB *>> clis(config.num_cli * config.num_coro, std::vector<BasicDB *>(num_server, nullptr));
         std::thread ths[80];
 
         for (uint64_t i = 0; i < config.num_cli; i++)
@@ -323,19 +331,22 @@ int main(int argc, char *argv[])
 #else
             rdma_dev &my_dev = dev;
 #endif
+            // 同一个rdma_cli可以连接rdma_conn，他们共享cq
             rdma_clis[i] = new rdma_client(my_dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
-            assert(rdma_conns[i] != nullptr);
-            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Signal, 0});
-            assert(rdma_wowait_conns[i] != nullptr);
-            for (uint64_t j = 0; j < config.num_coro; j++)
+            for (uint64_t s = 0; s < num_server; s++)
             {
-                lmrs[i * config.num_coro + j] =
-                    my_dev.create_mr(cbuf_size, mem_buf + cbuf_size * (i * config.num_coro + j));
-                BasicDB *cli;
-                cli = new ClientType(config, lmrs[i * config.num_coro + j], rdma_clis[i], rdma_conns[i],
-                                     rdma_wowait_conns[i], config.machine_id, i, j);
-                clis.push_back(cli);
+                rdma_conns[i][s] = rdma_clis[i]->connect(config.server_ips[s].c_str());
+                assert(rdma_conns[i][s] != nullptr);
+                rdma_wowait_conns[i][s] = rdma_clis[i]->connect(config.server_ips[s].c_str(), rdma_default_port, {ConnType::Signal, 0});
+                assert(rdma_wowait_conns[i][s] != nullptr);
+                for (uint64_t j = 0; j < config.num_coro; j++)
+                {
+                    // 修正：lmr的起始地址要包含server维度，保证每个lmr唯一
+                    size_t lmr_idx = (i * config.num_coro + j) * num_server + s;
+                    lmrs[i * config.num_coro + j][s] = my_dev.create_mr(cbuf_size, mem_buf + cbuf_size * lmr_idx);
+                    BasicDB *cli = new ClientType(config, lmrs[i * config.num_coro + j][s], rdma_clis[i], rdma_conns[i][s], rdma_wowait_conns[i][s], config.machine_id, i, j, s);
+                    clis[i * config.num_coro + j][s] = cli;
+                }
             }
         }
 
@@ -377,7 +388,8 @@ int main(int argc, char *argv[])
                 std::vector<task<>> tasks;
                 for (uint64_t j = 0; j < config.num_coro; j++)
                 {
-                    tasks.emplace_back(load((ClientType *)clis[cli_id * config.num_coro + j], cli_id, j));
+                    std::vector<ClientType *> &client_vec = reinterpret_cast<std::vector<ClientType *> &>(clis[cli_id * config.num_coro + j]);
+                    tasks.emplace_back(load(client_vec, cli_id, j));
                 }
                 rdma_cli->run(gather(std::move(tasks)));
             };
@@ -433,8 +445,8 @@ int main(int argc, char *argv[])
                 std::vector<task<>> tasks;
                 for (uint64_t j = 0; j < config.num_coro; j++)
                 {
-                    tasks.emplace_back(run(gens[cli_id * config.num_coro + j],
-                                           (ClientType *)(clis[cli_id * config.num_coro + j]), cli_id, j));
+                    std::vector<ClientType *> &client_vec = reinterpret_cast<std::vector<ClientType *> &>(clis[cli_id * config.num_coro + j]);
+                    tasks.emplace_back(run(gens[cli_id * config.num_coro + j], client_vec, cli_id, j));
                 }
                 rdma_cli->run(gather(std::move(tasks)));
             };
@@ -491,19 +503,24 @@ int main(int argc, char *argv[])
         // Reset Ser
         if (config.machine_id == 0)
         {
-            rdma_clis[0]->run(((ClientType *)clis[0])->reset_remote());
+            for (uint64_t s = 0; s < num_server; s++) {
+                rdma_clis[0]->run(((ClientType *)clis[0][s])->reset_remote());
+            }
         }
 
         free(mem_buf);
         for (uint64_t i = 0; i < config.num_cli; i++)
         {
-            for (uint64_t j = 0; j < config.num_coro; j++)
+            for (uint64_t s = 0; s < num_server; s++)
             {
-                rdma_free_mr(lmrs[i * config.num_coro + j], false);
-                delete clis[i * config.num_coro + j];
+                for (uint64_t j = 0; j < config.num_coro; j++)
+                {
+                    rdma_free_mr(lmrs[i * config.num_coro + j][s], false);
+                    delete clis[i * config.num_coro + j][s];
+                }
+                delete rdma_wowait_conns[i][s];
+                delete rdma_conns[i][s];
             }
-            delete rdma_wowait_conns[i];
-            delete rdma_conns[i];
             delete rdma_clis[i];
         }
     }

@@ -18,9 +18,9 @@ namespace MYHASH
     public:
 #if RDMA_SIGNAL
         Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn,
-               uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id) : SEPHASH::Client(config, _lmr, _cli, _conn, _wowait_conn, _machine_id, _cli_id, _coro_id)
+               uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id, uint64_t _server_id) : SEPHASH::Client(config, _lmr, _cli, _conn, _wowait_conn, _machine_id, _cli_id, _coro_id, _server_id)
         {
-            xrc_conn = _cli->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::XRC_SEND, 0}); // TODO: MyHash自己用cli连接，不外部传入
+            xrc_conn = _cli->connect(config.server_ips[_server_id].c_str(), rdma_default_port, {ConnType::XRC_SEND, 0});
         }
 #endif
         ~Client()

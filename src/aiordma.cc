@@ -812,7 +812,7 @@ void rdma_worker::worker_loop()
                 log_err("got bad completion with status: 0x%x, vendor syndrome: 0x%x", wc.status, wc.vendor_err);
                 cor->coro_state |= coro_state_error;
                 cor->print("错误");
-                // assert_require(wc.status == IBV_WC_SUCCESS); // TODO: 细粒度合并
+                assert_require(wc.status == IBV_WC_SUCCESS); // TODO: 细粒度合并
             }
             if (cor->coro_state & coro_state_inited)
             {

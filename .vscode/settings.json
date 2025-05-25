@@ -98,6 +98,10 @@
     "source_location": "cpp",
     "text_encoding": "cpp",
     "filesystem": "cpp",
-    "barrier": "cpp"
+    "barrier": "cpp",
+    "cfenv": "cpp",
+    "complex": "cpp",
+    "typeindex": "cpp",
+    "stdfloat": "cpp"
   }
 }

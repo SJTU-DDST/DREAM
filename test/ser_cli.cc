@@ -222,9 +222,9 @@ int main(int argc, char *argv[])
         {
             // log_err("创建第%lu个client, tempmp_size:%lu, max_coro:%lu, cq_size:%lu", i, rdma_default_tempmp_size, config.max_coro, config.cq_size);
             rdma_clis[i] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
-            rdma_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str());
+            rdma_conns[i] = rdma_clis[i]->connect(config.server_ips[0].c_str());
             assert(rdma_conns[i] != nullptr);
-            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ip.c_str(), rdma_default_port, {ConnType::Signal, 0}); // use wowait conn for signal
+            rdma_wowait_conns[i] = rdma_clis[i]->connect(config.server_ips[0].c_str(), rdma_default_port, {ConnType::Signal, 0}); // use wowait conn for signal
             assert(rdma_wowait_conns[i] != nullptr);
             for (uint64_t j = 0; j < config.num_coro; j++)
             {
@@ -232,7 +232,7 @@ int main(int argc, char *argv[])
                     dev.create_mr(cbuf_size, mem_buf + cbuf_size * (i * config.num_coro + j));
                 BasicDB *cli;
                 cli = new ClientType(config, lmrs[i * config.num_coro + j], rdma_clis[i], rdma_conns[i],
-                                     rdma_wowait_conns[i], config.machine_id, i, j);
+                                     rdma_wowait_conns[i], config.machine_id, i, j, 0);
                 clis.push_back(cli);
             }
         }
@@ -247,8 +247,8 @@ int main(int argc, char *argv[])
         if (config.machine_id == 0 && rehash_flag)
         {
             // rdma_clis[config.num_cli] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro,
-            // config.cq_size); rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
-            // rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
+            // config.cq_size); rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ips[0]);
+            // rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ips[0]);
 
             // lmrs[config.num_cli * config.num_coro] =
             //         dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));
@@ -347,8 +347,8 @@ int main(int argc, char *argv[])
         if (config.machine_id != 0 && rehash_flag)
         {
             // rdma_clis[config.num_cli] = new rdma_client(dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro,
-            // config.cq_size); rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
-            // rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ip);
+            // config.cq_size); rdma_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ips[0]);
+            // rdma_wowait_conns[config.num_cli] = rdma_clis[config.num_cli]->connect(config.server_ips[0]);
 
             // lmrs[config.num_cli * config.num_coro] =
             //         dev.create_mr(cbuf_size, mem_buf + cbuf_size * (config.num_cli * config.num_coro));

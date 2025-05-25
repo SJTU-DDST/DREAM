@@ -139,8 +139,9 @@ Server::~Server()
 }
 
 Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn,
-                uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id): config(config)
+                uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id, uint64_t _server_id): config(config)
 {
+    this->server_id = _server_id;
     // id info
     machine_id = _machine_id;
     cli_id = _cli_id;

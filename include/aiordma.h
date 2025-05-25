@@ -209,6 +209,16 @@ struct DirEntry
     {
         log_err("%s local_depth:%lu cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_lne:%lx", desc.c_str(), local_depth, cur_seg_ptr, main_seg_ptr, main_seg_len);
     }
+
+    std::string to_string(std::string desc = "") const
+    {
+        std::stringstream ss;
+        ss << desc << " local_depth:" << local_depth
+           << " cur_seg_ptr:" << std::hex << cur_seg_ptr
+           << " main_seg_ptr:" << std::hex << main_seg_ptr
+           << " main_seg_lne:" << std::hex << main_seg_len;
+        return ss.str();
+    }
 } __attribute__((aligned(1)));
 
 struct Directory
@@ -224,6 +234,22 @@ struct Directory
         {
             log_err("Entry %lx : local_depth:%lu cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_lne:%lx", i, segs[i].local_depth, segs[i].cur_seg_ptr, segs[i].main_seg_ptr, segs[i].main_seg_len);
         }
+    }
+
+    std::string to_string(std::string desc = "") const
+    {
+        std::stringstream ss;
+        ss << desc << " Global_Depth:" << global_depth << "\n";
+        for (uint64_t i = 0; i < std::max<uint64_t>(4, (1ULL << global_depth)); i++)
+        {
+            ss << "Entry " << std::hex << i << " : "
+               << "local_depth:" << std::dec << segs[i].local_depth
+               << " cur_seg_ptr:" << std::hex << segs[i].cur_seg_ptr
+               << " main_seg_ptr:" << std::hex << segs[i].main_seg_ptr
+               << " main_seg_lne:" << std::hex << segs[i].main_seg_len
+               << "\n";
+        }
+        return ss.str();
     }
 } __attribute__((aligned(1)));
 

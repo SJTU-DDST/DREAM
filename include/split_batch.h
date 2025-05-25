@@ -162,7 +162,7 @@ class Client : public BasicDB
 {
   public:
     Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn, rdma_conn *_wowait_conn,
-           uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id);
+           uint64_t _machine_id, uint64_t _cli_id, uint64_t _coro_id, uint64_t _server_id);
 
     Client(const Client &) = delete;
 

@@ -1,13 +1,15 @@
 #pragma once
 #include <stdint.h>
 #include "cmdline.h"
+#include <vector>
+#include <string>
 
 struct Config
 {
     bool is_server;
     bool auto_run_client;
     // const char *server_ip;
-    std::string server_ip;
+    std::vector<std::string> server_ips;
     uint64_t num_machine;
     uint64_t machine_id;
     uint64_t num_cli;
@@ -33,7 +35,8 @@ struct Config
         cmdline::parser cmd_parser;
         cmd_parser.add("server", 'a', "Is a server or client");
         cmd_parser.add("auto_run_client", 't', "Server automatically run client");
-        cmd_parser.add<std::string>("server_ip", 'b', "IP address of server", false);
+        // server_ip参数依然用string，后续手动分割
+        cmd_parser.add<std::string>("server_ip", 'b', "IP address of server, comma separated for multi-server", false);
         cmd_parser.add<uint64_t>("num_cli", 'c', "Number of client", false, 4, cmdline::range(1, 80));
         cmd_parser.add<uint64_t>("num_machine", 'd', "Number of client", false, 4, cmdline::range(1, 80));
         cmd_parser.add<uint64_t>("gid_idx", 'e', "gid index");
@@ -51,10 +54,17 @@ struct Config
         cmd_parser.add<uint64_t>("read_size", 'r', "read_size", false, 64);
         cmd_parser.add<uint64_t>("load_num", 's', "load_num", false, 10000);
         cmd_parser.parse_check(argc, argv);
-
         is_server = cmd_parser.exist("server");
         auto_run_client = cmd_parser.exist("auto_run_client");
-        server_ip = cmd_parser.get<std::string>("server_ip"); //.c_str();
+        std::string server_ip_str = cmd_parser.get<std::string>("server_ip");
+        // 多server: 按逗号分割
+        size_t start = 0, end;
+        while ((end = server_ip_str.find(',', start)) != std::string::npos) {
+            server_ips.push_back(server_ip_str.substr(start, end - start));
+            start = end + 1;
+        }
+        if (!server_ip_str.empty())
+            server_ips.push_back(server_ip_str.substr(start));
         num_machine = cmd_parser.get<uint64_t>("num_machine");
         num_cli = cmd_parser.get<uint64_t>("num_cli");
         num_coro = cmd_parser.get<uint64_t>("num_coro");
@@ -86,7 +96,11 @@ struct Config
         printf("Configuraion %s\n", desc.c_str());
         printf("is_server                 = %s\n", is_server ? "true" : "false");
         printf("auto_run_client                 = %s\n", auto_run_client ? "true" : "false");
-        printf("server_ip                 = %s\n", server_ip.c_str());
+        // 多server打印
+        printf("server_ips                = ");
+        for (size_t i = 0; i < server_ips.size(); ++i) {
+            printf("%s%s", server_ips[i].c_str(), (i + 1 == server_ips.size()) ? "\n" : ",");
+        }
         printf("machine_id                 = %lu\n", machine_id);
         printf("gid_idx                 = %lu\n", gid_idx);
         printf("max_coro                 = %ld\n", max_coro);
