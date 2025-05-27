@@ -96,7 +96,7 @@ task<> load(std::vector<Client*>& clis, uint64_t cli_id, uint64_t coro_id)
     if (config.machine_id == 0 && coro_id == 0 && cli_id < fixed_num_cli) {
         for (uint64_t i = 0; i < num_op; i++)
         {
-            if (i % 100000 == 0)
+            if (i % 100000 == 0 && !cli_id)
                 log_err("cli_id:%lu coro_id:%lu Load Progress: %lu/%lu", cli_id, coro_id, i, num_op);
 // #ifdef ALLOW_KEY_OVERLAP // Plush?
 //             GenKey(gen->operator()(key_chooser()), tmp_key);
@@ -189,7 +189,7 @@ task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t
     uint64_t load_avr = num_op; // this is correct, key cannot overlap, key range is [coros * num_op, (coros + 1) * num_op]
     for (uint64_t i = 0; i < num_op; i++)
     {
-        if (i % 100000 == 0)
+        if (i % 100000 == 0 && !cli_id)
             log_err("cli_id:%lu coro_id:%lu Run Progress: %lu/%lu", cli_id, coro_id, i, num_op);
         op_frac = op_chooser();
         if (op_frac < config.insert_frac)
@@ -306,7 +306,7 @@ int main(int argc, char *argv[])
     else
     {
         uint64_t num_server = config.server_ips.size();
-        uint64_t cbuf_size = (1ul << 20) * 500;
+        uint64_t cbuf_size = (1ul << 20) * 500; // 500MB for each lmr, adjust as needed, can be smaller
         // 修正：mem_buf分配空间要乘以num_server，保证每个lmr的地址唯一
         char *mem_buf = (char *)malloc(cbuf_size * (config.num_cli * config.num_coro * num_server + 1));
 #ifdef SPLIT_DEV_NUMA

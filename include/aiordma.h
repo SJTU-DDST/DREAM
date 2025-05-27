@@ -42,7 +42,7 @@ enum class ConnType : uint8_t
 struct ConnInfo
 {
     ConnType conn_type;
-    uint64_t client_sock;
+    uint64_t segloc;
 };
 
 constexpr uint64_t SEGMENT_SIZE = 1024;

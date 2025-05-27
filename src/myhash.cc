@@ -276,6 +276,8 @@ Retry_Send:
                 dep_bit = (new_main_seg->slots[i].dep >> dep_off) & 1;
                 if (dep_off == 3)
                 {
+                    if (!ralloc.ptr(new_main_seg->slots[i].offset))
+                        continue;
                     // if dep_off == 3 (Have consumed all info in dep bits), read && construct new dep
 #ifdef TOO_LARGE_KV
                     co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,

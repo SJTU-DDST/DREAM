@@ -1,4 +1,20 @@
 #include "sephash.h"
+#include <csignal>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+
+namespace {
+std::atomic_bool g_stop_flag{false};
+std::condition_variable g_cv;
+std::mutex g_mtx;
+
+void signal_handler(int) {
+    g_stop_flag = true;
+    g_cv.notify_all();
+}
+}
+
 namespace SEPHASH
 {
 
@@ -77,22 +93,26 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
 
         // log_err("start clients with run.py");
         // int result = system("python3 ../run.py 1 client 8 1");
-        std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
+
+        std::string type = "client";
+        if (config.server_ips.size() > 1)
+            type = "ser_cli"; // 需要额外运行servers
+        std::string command = std::format("python3 ../run.py {} {} {} {}", config.num_machine, type, config.num_cli, config.num_coro);
         log_err("Auto run client command: %s", command.c_str());
         int result = system(command.c_str());
         log_err("run.py completed with result: %d", result);
     }
     else
     {
-        auto wait_exit = [&]()
-        {
-            std::cin.get(); // 等待用户输入
+        signal(SIGINT, signal_handler);
+        signal(SIGTERM, signal_handler);
+        auto wait_exit = [&]() {
+            std::unique_lock<std::mutex> lk(g_mtx);
+            g_cv.wait(lk, [] { return g_stop_flag.load(); });
             ser.stop_serve();
             log_err("Exiting...");
         };
         std::thread th(wait_exit);
-
-        // ser.start_serve();
         ser.start_serve(nullptr, 1, zero_qp_cap, rdma_default_tempmp_size, rdma_default_max_coros, rdma_default_cq_size, rdma_default_port, dir);
         th.join();
     }
@@ -977,6 +997,8 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
             dep_bit = (new_main_seg->slots[i].dep >> dep_off) & 1;
             if (dep_off == 3)
             {
+                if (!ralloc.ptr(new_main_seg->slots[i].offset))
+                    continue;
                 // if dep_off == 3 (Have consumed all info in dep bits), read && construct new dep
 #ifdef TOO_LARGE_KV
                 co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,

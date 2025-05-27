@@ -1,4 +1,21 @@
 #include "plush.h"
+#include <csignal>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+
+namespace
+{
+    std::atomic_bool g_stop_flag{false};
+    std::condition_variable g_cv;
+    std::mutex g_mtx;
+
+    void signal_handler(int)
+    {
+        g_stop_flag = true;
+        g_cv.notify_all();
+    }
+}
 namespace Plush
 {
 
@@ -268,22 +285,27 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
         config.print();
 
         ser.start_serve();
+        std::string type = "client";
+        if (config.server_ips.size() > 1)
+            type = "ser_cli"; // 需要额外运行servers
 
         log_err("start clients with run.py");
-        std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
+        std::string command = std::format("python3 ../run.py {} {} {} {}", config.num_machine, type, config.num_cli, config.num_coro);
         log_err("Auto run client command: %s", command.c_str());
         int result = system(command.c_str());
         log_err("run.py completed with result: %d", result);
     }
     else
     {
+        signal(SIGINT, signal_handler);
+        signal(SIGTERM, signal_handler);
         auto wait_exit = [&]()
         {
-            // getchar();
-            std::cin.get(); // 等待用户输入
-            // 在这里添加你停止服务器的代码
+            std::unique_lock<std::mutex> lk(g_mtx);
+            g_cv.wait(lk, []
+                      { return g_stop_flag.load(); });
             ser.stop_serve();
-            std::cout << "Exiting..." << std::endl;
+            log_err("Exiting...");
         };
         std::thread th(wait_exit);
         ser.start_serve();

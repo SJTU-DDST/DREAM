@@ -682,7 +682,7 @@ void rdma_worker::worker_loop()
         auto current_time = std::chrono::steady_clock::now();
         auto seconds = std::chrono::duration_cast<std::chrono::seconds>(current_time - last_poll_time).count();
         if (seconds != last_seconds) {
-            if (seconds == 30) {
+            if (seconds == 300) {
                 log_err("卡住了%lu秒，输出所有segs=%lu的信息，global_depth: %lu", seconds, this->_max_segloc, dir->global_depth);
                 for (int i = 0; i <= this->_max_segloc; i++) {
                     if (dir == nullptr || dir->segs == nullptr || !dir->segs[i].cur_seg_ptr) break;
@@ -947,19 +947,19 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                         while ((recv_len += recv(accepted_sock, &conn_info + recv_len, sizeof(conn_info) - recv_len, 0)) < sizeof(conn_info))
                             ;
                         assert_require(recv_len == sizeof(conn_info));
-                        assert_require(conn_info.client_sock < 100000);
+                        assert_require(conn_info.segloc < 100000);
 #endif
                         auto worker = workers[accepted_sock % worker_num];
                         if (conn_info.conn_type == ConnType::XRC_SEND) {
                             // log_err("接收到XRC_SEND的连接，类型更改为XRC_RECV");
                             conn_info.conn_type = ConnType::XRC_RECV;
                         }
-                        // log_err("服务端接收到conn_info: %p, conn_type: %d, client_sock: %lu", &conn_info, conn_info.conn_type, conn_info.client_sock);
+                        // log_err("服务端接收到conn_info: %p, conn_type: %d, segloc: %lu", &conn_info, conn_info.conn_type, conn_info.segloc);
                         auto conn = new rdma_conn(worker, accepted_sock, conn_info); // IMPORTANT: 服务器创建QP
                         assert_require(conn);
                         sk2conn[accepted_sock] = conn;
 #if RDMA_SIGNAL
-                        log_test("创建qp_num: %d, 是否使用signal_srq: %d, is_signal_conn: %d, client_sock: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, conn_info.conn_type == ConnType::Signal, conn_info.client_sock);
+                        log_test("创建qp_num: %d, 是否使用signal_srq: %d, is_signal_conn: %d, segloc: %lu", conn->qp->qp_num, conn->qp->srq == worker->signal_srq, conn_info.conn_type == ConnType::Signal, conn_info.segloc);
 #endif
                     }
                     else
@@ -1013,14 +1013,14 @@ void rdma_server::start_serve(std::function<task<>(rdma_conn*)> handler, int wor
                                 while ((recv_len += recv(accepted_sock, &conn_info + recv_len, sizeof(conn_info) - recv_len, 0)) < sizeof(conn_info))
                                     ;
                                 assert_require(recv_len == sizeof(conn_info));
-                                assert_require(conn_info.client_sock < 100000);
+                                assert_require(conn_info.segloc < 100000);
 #endif
                                 auto worker = workers[accepted_sock % worker_num];
                                 if (conn_info.conn_type == ConnType::XRC_SEND) {
                                     // log_err("接收到XRC_SEND的连接，类型更改为XRC_RECV");
                                     conn_info.conn_type = ConnType::XRC_RECV;
                                 }
-                                log_err("服务端接收到conn_info: %p, conn_type: %d, client_sock: %lu", &conn_info, conn_info.conn_type, conn_info.client_sock);
+                                log_err("服务端接收到conn_info: %p, conn_type: %d, segloc: %lu", &conn_info, conn_info.conn_type, conn_info.segloc);
                                 conn = new rdma_conn(worker, accepted_sock, conn_info); // IMPORTANT: 服务器创建QP
                                 log_err("reconnect: 创建rdma_conn成功, sk: %d, conn: %p", accepted_sock, conn);
                                 assert_require(conn);
@@ -1073,7 +1073,7 @@ rdma_conn *rdma_worker::connect(const char *host, int port, ConnInfo conn_info)
     log_info("socket connected");
 
 #if RDMA_SIGNAL
-    conn_info.client_sock = sock;
+    conn_info.segloc = sock;
     assert_require(send(sock, &conn_info, sizeof(conn_info), 0) == sizeof(conn_info));
 #endif
 
@@ -1085,7 +1085,7 @@ rdma_conn *rdma_worker::connect(const char *host, int port, ConnInfo conn_info)
         ;
     if (recv_len == -1)
     {
-        log_err("recv error, errno: %s", strerror(errno));
+        log_err("recv error, errno: %s, the server is DREAM server, but the client is RACE/SepHash client", strerror(errno));
         close(sock);
         return nullptr;
     }
@@ -1112,7 +1112,7 @@ rdma_conn *rdma_worker::reconnect(int sock, ConnInfo conn_info)
     uint8_t recv_buf[rdma_sock_recv_buf_size];
 
 #if RDMA_SIGNAL
-    conn_info.client_sock = sock;
+    conn_info.segloc = sock;
     // log_err("reconnect: 客户端调用send发送conn_info, sock: %d, conn_info: %p", sock, &conn_info);
     assert_require(send(sock, &conn_info, sizeof(conn_info), 0) == sizeof(conn_info));
 #endif

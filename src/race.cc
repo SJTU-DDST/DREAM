@@ -1,5 +1,23 @@
 // 因为使用协程的原因，不能嵌套太多层子函数调用
 #include "race.h"
+#include <csignal>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+
+namespace
+{
+    std::atomic_bool g_stop_flag{false};
+    std::condition_variable g_cv;
+    std::mutex g_mtx;
+
+    void signal_handler(int)
+    {
+        g_stop_flag = true;
+        g_cv.notify_all();
+    }
+}
+
 namespace RACE
 {
 
@@ -69,22 +87,27 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
         config.print();
 
         ser.start_serve();
+        std::string type = "client";
+        if (config.server_ips.size() > 1)
+            type = "ser_cli"; // 需要额外运行servers
 
         log_err("start clients with run.py");
-        std::string command = std::format("python3 ../run.py {} client {} {}", config.num_machine, config.num_cli, config.num_coro);
+        std::string command = std::format("python3 ../run.py {} {} {} {}", config.num_machine, type, config.num_cli, config.num_coro);
         log_err("Auto run client command: %s", command.c_str());
         int result = system(command.c_str());
         log_err("run.py completed with result: %d", result);
     }
     else
     {
+        signal(SIGINT, signal_handler);
+        signal(SIGTERM, signal_handler);
         auto wait_exit = [&]()
         {
-            // getchar();
-            std::cin.get(); // 等待用户输入
-            // 在这里添加你停止服务器的代码
+            std::unique_lock<std::mutex> lk(g_mtx);
+            g_cv.wait(lk, []
+                      { return g_stop_flag.load(); });
             ser.stop_serve();
-            std::cout << "Exiting..." << std::endl;
+            log_err("Exiting...");
         };
         std::thread th(wait_exit);
         ser.start_serve();
@@ -118,7 +141,7 @@ Server::~Server()
 }
 
 Client::Client(Config &config, ibv_mr *_lmr, rdma_client *_cli, rdma_conn *_conn,rdma_conn *_wowait_conn, uint64_t _machine_id,
-                       uint64_t _cli_id, uint64_t _coro_id)
+                       uint64_t _cli_id, uint64_t _coro_id, uint64_t _server_id)
 {
     // id info
     machine_id = _machine_id;
@@ -293,19 +316,18 @@ task<> Client::insert(Slice *key, Slice *value)
 #else
     auto wkv = conn->write(kvblock_ptr, rmr.rkey, kv_block, kvblock_len, lmr->lkey);
 #endif
-    uint64_t retry_cnt = 0;
+    retry_cnt = 0;
 Retry:
     // log_err("[%lu:%lu:%lu] op_key:%lu",machine_id,cli_id,coro_id,this->op_key);
     alloc.ReSet(sizeof(Directory) + kvblock_len);
-    retry_cnt++;
-    // if (retry_cnt++ == 1000)
-    // {
-    //     log_err("[%lu:%lu]Fail to insert after %lu retries", cli_id, coro_id, retry_cnt);
-    //     perf.push_insert();
-    //     sum_cost.end_insert();
-    //     sum_cost.push_retry_cnt(retry_cnt);
-    //     co_return;
-    // }
+    if (retry_cnt++ == 1000)
+    {
+        // log_err("[%lu:%lu]Fail to insert after %lu retries", cli_id, coro_id, retry_cnt);
+        perf.push_insert();
+        sum_cost.end_insert();
+        sum_cost.push_retry_cnt(retry_cnt);
+        co_return;
+    }
     // Read Segment Ptr From CCEH_Cache
     uint64_t segloc = get_seg_loc(pattern_1, dir->global_depth);
     uintptr_t segptr = dir->segs[segloc].seg_ptr;
@@ -877,8 +899,12 @@ task<> Client::remove(Slice *key)
     Slice ret_value;
     ret_value.data = data;
     uint64_t cnt=0;
+    retry_cnt = 0;
 Retry:
     alloc.ReSet(sizeof(Directory));
+    if (retry_cnt++ == 1000) {
+        co_return;
+    }
     // 1st RTT: Using RDMA doorbell batching to fetch two combined buckets
     uint64_t pattern_1, pattern_2;
     auto pattern = hash(key->data, key->len);
@@ -922,8 +948,12 @@ task<> Client::update(Slice *key,Slice *value)
     pattern_1 = (uint64_t)pattern;
     pattern_2 = (uint64_t)(pattern >> 64);
     uint64_t cnt = 0 ;
+    retry_cnt = 0;
 Retry:
     alloc.ReSet(sizeof(Directory)+kvblock_len);
+    if (retry_cnt++ == 1000) {
+        co_return;
+    }
     // 1st RTT: Using RDMA doorbell batching to fetch two combined buckets
     uint64_t segloc = get_seg_loc(pattern_1, dir->global_depth);
     uintptr_t segptr = dir->segs[segloc].seg_ptr;
@@ -946,7 +976,7 @@ Retry:
         if (!co_await conn->cas_n(slot_ptr, rmr.rkey, slot, *(uint64_t*)tmp))
             goto Retry;
     }else{
-        log_err("[%lu:%lu]No match key for %lu to update",cli_id,coro_id,*(uint64_t*)key->data);
+        // log_err("[%lu:%lu]No match key for %lu to update",cli_id,coro_id,*(uint64_t*)key->data);
     }
 }
 
