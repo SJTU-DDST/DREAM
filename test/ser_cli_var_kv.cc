@@ -317,7 +317,7 @@ int main(int argc, char *argv[])
 #endif
         std::vector<std::vector<ibv_mr *>> lmrs(config.num_cli * config.num_coro, std::vector<ibv_mr *>(num_server, nullptr));
         std::vector<rdma_client *> rdma_clis(config.num_cli, nullptr);
-        std::vector<std::vector<rdma_conn *>> rdma_conns(config.num_cli, std::vector<rdma_conn *>(num_server, nullptr));
+        // std::vector<std::vector<rdma_conn *>> rdma_conns(config.num_cli, std::vector<rdma_conn *>(num_server, nullptr));
         std::vector<std::vector<rdma_conn *>> rdma_wowait_conns(config.num_cli, std::vector<rdma_conn *>(num_server, nullptr));
         std::vector<std::vector<BasicDB *>> clis(config.num_cli * config.num_coro, std::vector<BasicDB *>(num_server, nullptr));
         std::thread ths[80];
@@ -335,8 +335,8 @@ int main(int argc, char *argv[])
             rdma_clis[i] = new rdma_client(my_dev, so_qp_cap, rdma_default_tempmp_size, config.max_coro, config.cq_size);
             for (uint64_t s = 0; s < num_server; s++)
             {
-                rdma_conns[i][s] = rdma_clis[i]->connect(config.server_ips[s].c_str());
-                assert(rdma_conns[i][s] != nullptr);
+                // rdma_conns[i][s] = rdma_clis[i]->connect(config.server_ips[s].c_str()); // 可以使用wowait_conn
+                // assert(rdma_conns[i][s] != nullptr);
                 rdma_wowait_conns[i][s] = rdma_clis[i]->connect(config.server_ips[s].c_str(), rdma_default_port, {ConnType::Signal, 0});
                 assert(rdma_wowait_conns[i][s] != nullptr);
                 for (uint64_t j = 0; j < config.num_coro; j++)
@@ -344,11 +344,12 @@ int main(int argc, char *argv[])
                     // 修正：lmr的起始地址要包含server维度，保证每个lmr唯一
                     size_t lmr_idx = (i * config.num_coro + j) * num_server + s;
                     lmrs[i * config.num_coro + j][s] = my_dev.create_mr(cbuf_size, mem_buf + cbuf_size * lmr_idx);
-                    BasicDB *cli = new ClientType(config, lmrs[i * config.num_coro + j][s], rdma_clis[i], rdma_conns[i][s], rdma_wowait_conns[i][s], config.machine_id, i, j, s);
+                    BasicDB *cli = new ClientType(config, lmrs[i * config.num_coro + j][s], rdma_clis[i], rdma_wowait_conns[i][s], rdma_wowait_conns[i][s], config.machine_id, i, j, s);
                     clis[i * config.num_coro + j][s] = cli;
                 }
             }
         }
+        // 如果一个机器有超过190个QP，性能会下降。因此在连接4个MN时，单台机器使用16个线程，共16*2*4=128个QP。
 
         // For Rehash Thread
         std::atomic_bool exit_flag{true};
@@ -519,7 +520,7 @@ int main(int argc, char *argv[])
                     delete clis[i * config.num_coro + j][s];
                 }
                 delete rdma_wowait_conns[i][s];
-                delete rdma_conns[i][s];
+                // delete rdma_conns[i][s];
             }
             delete rdma_clis[i];
         }

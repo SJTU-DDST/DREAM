@@ -207,7 +207,7 @@ is_noopt_hash() {
 }
 
 # 如果实验类型包含"insert"且不是check模式，设置fp碰撞模式为false
-if [ "$experiment_type" = "insert" ] && [ "$mode" != "check" ]; then
+if [[ "$experiment_type" == *"insert"* ]] && [ "$mode" != "check" ]; then
     set_fp_collision_mode false
 else
     set_fp_collision_mode true

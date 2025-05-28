@@ -676,7 +676,7 @@ task<> Client::MoveData(uint64_t old_seg_ptr, uint64_t new_seg_ptr, Segment *seg
                     co_await SetSlot(over_buc_ptr2, *(uint64_t *)(&cur_buc->slots[slot_idx])))
                 {
                     uintptr_t slot_ptr = buc_ptr + sizeof(uint64_t) + sizeof(Slot) * i;
-                    log_err("[%lu:%lu:%lu]Fail to move slot_ptr:%lx",machine_id,cli_id,coro_id,slot_ptr);
+                    // log_err("[%lu:%lu:%lu]Fail to move slot_ptr:%lx",machine_id,cli_id,coro_id,slot_ptr);
                     continue;
                 }
 

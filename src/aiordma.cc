@@ -592,19 +592,19 @@ void rdma_worker::print_running_coros()
         if (cor->ctx != 0)
         {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cor->start_time).count();
-            // if (elapsed >= 10)
-            // {
-            //     log_err("终止超时coro ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed);
-            //     cor->coro_state |= (coro_state_error | coro_state_ready);
-            //     if (cor->coro_state & coro_state_inited)
-            //         cor->resume_handler();
-            // }
-            // std::string location = std::string(cor->location.file_name()) + ":" + std::to_string(cor->location.line());
-            // if (elapsed >= 5)
-            // {
-            //     // location_count[location]++;
-            //     cor->print(std::format("运行超时，协程ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed));
-            // }
+            if (elapsed >= 10)
+            {
+                log_err("终止超时coro ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed);
+                cor->coro_state |= (coro_state_error | coro_state_ready);
+                if (cor->coro_state & coro_state_inited)
+                    cor->resume_handler();
+            }
+            std::string location = std::string(cor->location.file_name()) + ":" + std::to_string(cor->location.line());
+            if (elapsed >= 5)
+            {
+                // location_count[location]++;
+                cor->print(std::format("运行超时，协程ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed));
+            }
         }
     }
 
