@@ -60,7 +60,7 @@ def hash_type_to_label_breakdown(hash_type):
     elif hash_type == 'SEPHASH':
         return 'Base'
     elif hash_type == 'RACE-Partitioned':
-        return 'RACE-P'
+        return 'RACE-Partitioned'
     else:
         return hash_type 
 
@@ -388,7 +388,7 @@ def plot_variable_kv(ax):
     # 设置图表属性
     ax.set_xlabel('KV Size (bytes)')
     ax.set_ylabel('Average Latency (μs)')
-    ax.set_title('(c) Variable KV Sizes')
+    ax.set_title('(d) Variable KV Sizes')
     
     # Set x-tick positions and labels manually
     ax.set_xticks(list(range(len(sizes))))
@@ -496,7 +496,7 @@ def plot_breakdown(ax):
     # 设置图表属性
     ax.set_xlabel('Number of Threads')
     ax.set_ylabel('Throughput (Kops)')
-    ax.set_title('(d) Breakdown Analysis')
+    ax.set_title('(c) Breakdown Analysis')
     
     # 设置x轴刻度为均匀间隔
     ax.set_xticks(x_positions)
@@ -515,11 +515,11 @@ if __name__ == "__main__":
     # Fig 2: YCSB
     plot_ycsb(axs[1])
     
-    # Fig 3: 变长KV
-    plot_variable_kv(axs[2])
+    # Fig 3: 分解（原本是变长KV，现交换顺序）
+    plot_breakdown(axs[2])
     
-    # Fig 4: 分解
-    plot_breakdown(axs[3])
+    # Fig 4: 变长KV（原本是分解，现交换顺序）
+    plot_variable_kv(axs[3])
 
     # 收集所有子图的图例信息
     all_handles = []
@@ -549,16 +549,17 @@ if __name__ == "__main__":
     # 由于我们有4个子图，每个占据25%的宽度，前两个子图总共占50%的宽度
     # 所以中心位置应该在25%的位置(0.25)
     fig.legend(ordered_handles, ordered_labels, loc='upper center', 
-            bbox_to_anchor=(0.275, 1.21), ncol=2, frameon=True)
+            bbox_to_anchor=(0.27, 1.21), ncol=2, frameon=True)
     
-    # 为第三张子图（变长KV）创建单独的图例
+    # 为第三张子图（现在是分解）创建单独的图例
     handles3, labels3 = axs[2].get_legend_handles_labels()
     fig.legend(handles3, labels3, loc='upper center',
-            bbox_to_anchor=(0.65, 1.25), ncol=1, frameon=True)
+            bbox_to_anchor=(0.6, 1.21), ncol=2, frameon=True)
     
+    # 为第四张子图（现在是变长KV）创建单独的图例
     handles4, labels4 = axs[3].get_legend_handles_labels()
     fig.legend(handles4, labels4, loc='upper center',
-            bbox_to_anchor=(0.85, 1.21), ncol=2, frameon=True)
+            bbox_to_anchor=(0.885, 1.21), ncol=2, frameon=True)
     
     # 调整整体布局
     plt.tight_layout()

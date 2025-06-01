@@ -84,7 +84,7 @@ Server::Server(Config &config) : dev(nullptr, 1, config.gid_idx), ser(dev)
     if (config.auto_run_client)
     {
         log_err("auto run client");
-        config.print();
+        // config.print();
 
         ser.start_serve();
         std::string type = "client";
@@ -875,7 +875,7 @@ task<bool> Client::search_bucket(Slice *key, Slice *value, uintptr_t &slot_ptr, 
         buc_ptr = (round / 2 ? bucptr_2 : bucptr_1) + (round % 2 ? sizeof(Bucket) : 0);
         for (uint64_t i = 0; i < SLOT_PER_BUCKET; i++)
         {
-            if (*(uint64_t*)(&buc->slots[i]) && buc->slots[i].fp == fp(pattern_1))
+            if (*(uint64_t*)(&buc->slots[i]) && buc->slots[i].fp == fp(pattern_1) && is_valid_ptr(ralloc.ptr(buc->slots[i].offset)))
             {
                 KVBlock *kv_block = (KVBlock *)alloc.alloc(buc->slots[i].len);
                 co_await conn->read(ralloc.ptr(buc->slots[i].offset), rmr.rkey, kv_block, buc->slots[i].len, lmr->lkey);

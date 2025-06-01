@@ -9,6 +9,9 @@ experiment_type=${1:-"insert"}
 original_experiment_type=$experiment_type  # 保存原始实验类型名称
 mode=${2:-"run"}  # 可以是 "run", "rerun" 或 "check"
 
+# 全局最大每台机器客户端数
+MAX_CLIENTS_PER_MACHINE=56
+
 # 函数：解析实验类型，提取大小并设置实际实验类型
 parse_experiment_size() {
     local full_exp_type=$1
@@ -179,6 +182,7 @@ set_fp_collision_mode() {
     sed -i "s/#define READ_FULL_KEY_ON_FP_COLLISION [0-1]/#define READ_FULL_KEY_ON_FP_COLLISION ${value}/" "$common_h_path"
     echo "设置 READ_FULL_KEY_ON_FP_COLLISION 为 ${value}"
 }
+# mainseg大小到一定阈值再批量去重一次？这样可以减少重复键的数量，但尾部延迟增加一些
 
 # 新增函数：控制 DISABLE_OPTIMISTIC_SPLIT 定义
 toggle_optimistic_split() {
@@ -270,7 +274,7 @@ if [ "$mode" == "rerun" ] || [ "$mode" == "check" ]; then
                 cp "$experiment_script" "../ser_cli.sh"
                 
                 # 计算需要的机器数量和每台机器的客户端数量
-                num_machines=$(( (num_cli + 55) / 56 ))
+                num_machines=$(( (num_cli + $((MAX_CLIENTS_PER_MACHINE-1))) / MAX_CLIENTS_PER_MACHINE ))
                 clients_per_machine=$(( (num_cli + num_machines - 1) / num_machines ))
                 
                 # 构建命令
@@ -369,7 +373,7 @@ for hash_type in "${hash_types[@]}"; do
     
     for num_cli in "${num_cli_list[@]}"; do
         # 计算需要的机器数量和每台机器的客户端数量
-        num_machines=$(( (num_cli + 55) / 56 ))
+        num_machines=$(( (num_cli + $((MAX_CLIENTS_PER_MACHINE-1))) / MAX_CLIENTS_PER_MACHINE ))
         clients_per_machine=$(( (num_cli + num_machines - 1) / num_machines ))
         
         # 构建命令
@@ -406,10 +410,10 @@ for hash_type in "${hash_types[@]}"; do
             fi
         done
         
-        echo "处理完成 num_cli=${num_cli}"
+        echo "处理完成 hash_type=${hash_type}, num_cli=${num_cli}"
     done
     
-    echo "运行 ${hash_type} 完成"
+    # echo "运行 ${hash_type} 完成"
     reset_hash_type
 done
 

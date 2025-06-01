@@ -3,9 +3,6 @@
 
 namespace MYHASH
 {
-#if SPLIT_LOCAL_LOCK
-    std::vector<std::shared_mutex> Client::segloc_locks(65536);
-#endif
     task<> Client::insert(Slice *key, Slice *value)
     {
         perf.start_perf();
@@ -52,8 +49,6 @@ namespace MYHASH
         // 4. write slot
         // a. Init Slot
         uint64_t dep = dir->segs[segloc].local_depth - (dir->segs[segloc].local_depth % 4);
-        // 去掉before read后现在还没有seg_meta，可以用缓存的dir->segs[segloc].local_depth
-        // 这个会影响分裂后去到哪个segment，发送slot时需要带上本地的local_depth，分裂时如果不匹配则读取远端的local_depth
         tmp->dep = pattern >> dep;
         tmp->fp = fp(pattern);
         tmp->len = (kvblock_len + ALIGNED_SIZE - 1) / ALIGNED_SIZE;
@@ -64,8 +59,6 @@ namespace MYHASH
 
         // a2. send slot
         static int send_cnt = 0;
-        // perf.start_perf();
-
         if (seg_meta.find(segloc) == seg_meta.end())
         {
             seg_meta[segloc] = CurSegMeta();
@@ -84,60 +77,14 @@ namespace MYHASH
             co_await conn->read(srq_num_offset, seg_rmr.rkey, srq_num_ptr, sizeof(uint32_t), lmr->lkey);
 #endif
             seg_meta[segloc].srq_num = *srq_num_ptr;
-            log_test("读取到segloc:%lu的srq_num:%u global_depth:%lu local_depth:%lu", 
-                segloc, seg_meta[segloc].srq_num, dir->global_depth, dir->segs[segloc].local_depth);
         }
-        log_test("准备用qp_num:%u发送slot到segloc:%lu srq_num:%u", xrc_conn->qp->qp_num, segloc, seg_meta[segloc].srq_num);
         assert_require(seg_meta[segloc].srq_num > 0);
-        
-        bool is_retry = false;
-Retry_Send:
-#if SPLIT_LOCAL_LOCK
-        std::shared_lock<std::shared_mutex> read_lock(segloc_locks[segloc]);
-#endif
-#if CORO_DEBUG
-        if (is_retry)
-            log_err("[%lu:%lu:%lu]重试对segloc:%lu的srq_num:%u第%d次发送slot", cli_id, coro_id, this->key_num, segloc, seg_meta[segloc].srq_num, retry_cnt);
-        auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num, 
-                                       std::source_location::current(), 
-                                       std::format("[{}:{}]segloc:{}第{}次SEND slot", 
-                                                  cli_id, coro_id, segloc, send_cnt + 1));
-#else
-        auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
-#endif
-#if SPLIT_LOCAL_LOCK
-        read_lock.unlock();
-#endif
-        int success = co_await std::move(send_slot);
-        if (!success)
         {
-            is_retry = true;
-            retry_cnt++;
-            if (retry_cnt < 10)
-            {
-                if (conn->check_qp_state()) // error
-                {
-                    this->recreate_xrc_conn();
-                    log_err("[%lu:%lu:%lu]对segloc:%lu的srq_num:%u第%d次发送slot失败，准备重试", 
-                            cli_id, coro_id, this->key_num, segloc, seg_meta[segloc].srq_num, retry_cnt);
-                    // sleep(1);
-                }
-                goto Retry_Send;
-            }
-            else
-            {
-                log_err("第%d次发送slot失败，放弃", retry_cnt);
-                co_return;
-            }
-        } else if (is_retry)
-        {
-            log_err("第%d次发送slot重试后成功", retry_cnt);
+            xrc_conn->dev.send_semaphore.acquire(); // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR
+            auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
+            co_await std::move(send_slot);
+            xrc_conn->dev.send_semaphore.release();
         }
-        
-        log_test("发送slot到segloc:%lu srq_num:%u完成", segloc, seg_meta[segloc].srq_num);
-        // perf.push_perf("send_slot");
-        // log_test("[%lu:%lu]完成第%d次SEND slot segloc:%lu", cli_id, coro_id, ++send_cnt, segloc);
-
         // a3. fetch and add slot_cnt
         uint64_t fetch = 0;
         auto faa_slot_cnt = conn->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, 1ULL << 1);
@@ -181,10 +128,6 @@ Retry_Send:
         if (seg_meta[segloc].slot_cnt == 0)
         {
             {
-#if SPLIT_LOCAL_LOCK
-                std::unique_lock<std::shared_mutex> write_lock(segloc_locks[segloc]);
-#endif
-
                 CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
                 co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, 3 * sizeof(uint64_t), lmr->lkey); // don't read bitmap
                 seg_meta[segloc].local_depth = my_seg_meta->local_depth; // 顺便同步元数据，但因为seg_meta不是用alloc.alloc分配的，不能直接读过去
@@ -243,10 +186,10 @@ Retry_Send:
         // 3. Sort Segment
         MainSeg *new_main_seg = (MainSeg *)alloc.alloc(main_seg_size + sizeof(Slot) * SLOT_PER_SEG);
 #if READ_FULL_KEY_ON_FP_COLLISION
-        uint64_t new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth);
+        uint64_t new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, true); // TODO: 每若干次合并批量去重一次
         // new_main_seg->print(new_seg_len);
 #else
-        uint64_t new_seg_len = merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth);
+        uint64_t new_seg_len = merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, false);
 #endif
         FpInfo fp_info[MAX_FP_INFO] = {};
         cal_fpinfo(new_main_seg->slots, new_seg_len, fp_info); // SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len
@@ -386,10 +329,10 @@ Retry_Send:
                     co_await conn->write(cur_seg_ptr, seg_rmr.rkey, &dir->segs[cur_seg_loc + offset], sizeof(DirEntry), lmr->lkey);
 
                     // log_err("[%lu:%lu:%lu]Segment分裂, first_original_seg_loc:%lu, first_new_seg_loc:%lu, depth:%lu->%lu", cli_id, coro_id, this->key_num, first_original_seg_loc, first_new_seg_loc, local_depth, local_depth + 1);
-                    // if (local_depth == dir->global_depth){
+                    if (local_depth == dir->global_depth){
                     //     // global
-                    //     log_err("[%lu:%lu:%lu]Global SPlit At segloc:%lu depth:%lu to :%lu with new seg_ptr:%lx new_main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr,i & 1 ?new_main_ptr2:new_main_ptr1);
-                    // }else{
+                        log_err("[%lu:%lu:%lu]Global SPlit At segloc:%lu depth:%lu to :%lu with new seg_ptr:%lx new_main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr,i & 1 ?new_main_ptr2:new_main_ptr1);
+                    }//else{
                     //     // local
                     //     log_err("[%lu:%lu:%lu]Local SPlit At segloc:%lu depth:%lu to :%lu with new seg_ptr:%lx new main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr, i & 1 ? new_main_ptr2:new_main_ptr1);
                     // }
@@ -513,7 +456,7 @@ Retry_Send:
     }
 
 #if READ_FULL_KEY_ON_FP_COLLISION // correct but not efficient
-    task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth)
+    task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth, bool dedup)
     {
         // 定义排序用的结构体
         struct SortItem
@@ -694,11 +637,7 @@ Retry_Send:
         co_return new_seg_len;
     }
 #else // 去重不干净
-#if READ_FULL_KEY_ON_FP_COLLISION
-    task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth)
-#else
     uint64_t Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth)
-#endif
     {
         std::sort(data, data + len);
         uint8_t sign = data[0].sign;
@@ -707,91 +646,19 @@ Retry_Send:
         if (len && old_seg_len) {
             for (uint64_t i = 0; i < len + old_seg_len; i++)
             {
-            #if READ_FULL_KEY_ON_FP_COLLISION
-                if (data[off_1].fp < old_seg[off_2].fp)
-            #else
                 if (data[off_1].fp <= old_seg[off_2].fp)
-            #endif
                 {
                     if (data[off_1].local_depth == local_depth)
                         new_seg[new_seg_len++] = data[off_1];
                     off_1++;
                 }
-            #if READ_FULL_KEY_ON_FP_COLLISION
-                else if (data[off_1].fp > old_seg[off_2].fp)
-            #else
                 else
-            #endif
                 {
                     if (old_seg_len == 0)
                         old_seg[0].print(std::format("[{}:{}:{}]old_seg_len==0", cli_id, coro_id, this->key_num));
                     new_seg[new_seg_len++] = old_seg[off_2];
                     off_2++;
                 }
-            #if READ_FULL_KEY_ON_FP_COLLISION
-                else if (data[off_1].fp == old_seg[off_2].fp && data[off_1].fp_2 != old_seg[off_2].fp_2)
-                {
-                    // fp相同但fp_2不同，按fp_2排序
-                    if (data[off_1].fp_2 < old_seg[off_2].fp_2)
-                    {
-                        if (data[off_1].local_depth == local_depth)
-                            new_seg[new_seg_len++] = data[off_1];
-                        off_1++;
-                    }
-                    else
-                    {
-                        new_seg[new_seg_len++] = old_seg[off_2];
-                        off_2++;
-                    }
-                }
-                else // fp和fp_2都相同
-                {
-                    // 读取完整key进行比较
-                    // log_err("[%lu:%lu:%lu]发现fp=%d fp2=%d相同，读取完整key比较", cli_id, coro_id, this->key_num, data[off_1].fp, data[off_1].fp_2);
-
-                    // 分配足够空间存储KV块
-                    KVBlock *kv1 = (KVBlock *)alloc.alloc(data[off_1].len * ALIGNED_SIZE);
-                    KVBlock *kv2 = (KVBlock *)alloc.alloc(old_seg[off_2].len * ALIGNED_SIZE);
-
-                    // 读取两个KV块
-            #if CORO_DEBUG
-                    co_await conn->read(ralloc.ptr(data[off_1].offset), seg_rmr.rkey, kv1, data[off_1].len * ALIGNED_SIZE, lmr->lkey, 
-                                       std::source_location::current(), 
-                                       std::format("[{}:{}]segloc:{}读取CurSegKVBlock地址\n{}", cli_id, coro_id, this->key_num, ralloc.ptr(data[off_1].offset)));
-                    co_await conn->read(ralloc.ptr(old_seg[off_2].offset), seg_rmr.rkey, kv2, old_seg[off_2].len * ALIGNED_SIZE, lmr->lkey, 
-                                       std::source_location::current(), 
-                                       std::format("[{}:{}]segloc:{}读取MainSegKVBlock地址\n{}", cli_id, coro_id, this->key_num, ralloc.ptr(old_seg[off_2].offset)));
-            #else
-                    co_await conn->read(ralloc.ptr(data[off_1].offset), seg_rmr.rkey, kv1, data[off_1].len * ALIGNED_SIZE, lmr->lkey);
-                    co_await conn->read(ralloc.ptr(old_seg[off_2].offset), seg_rmr.rkey, kv2, old_seg[off_2].len * ALIGNED_SIZE, lmr->lkey);
-            #endif
-
-                    // 比较key是否相同
-                    bool same_key = (kv1->k_len == kv2->k_len) &&
-                                    (memcmp(kv1->data, kv2->data, kv1->k_len) == 0);
-
-                    if (same_key)
-                    {
-                        // 相同key，只保留较新的数据(data[off_1]) // FIXME: 可能不对。CurSeg可能有多个相同fp，其中一些是相同key，一些是其他key。MainSeg中也可能有。这里直接把data[off_1]放进去，可能他会被后面的CurSeg中的相同key覆盖。
-                        // log_err("[%lu:%lu:%lu]确认为相同key，保留较新数据", cli_id, coro_id, this->key_num);
-                        if (data[off_1].local_depth == local_depth)
-                            new_seg[new_seg_len++] = data[off_1];
-                    }
-                    else
-                    {
-                        // 不同key，哈希冲突，两个都保留
-                        // log_err("[%lu:%lu:%lu]确认为不同key(哈希冲突)，两个都保留 offset1:%lu offset2:%lu", 
-                        //         cli_id, coro_id, this->key_num, 
-                        //         data[off_1].offset, old_seg[off_2].offset);
-                        if (data[off_1].local_depth == local_depth)
-                            new_seg[new_seg_len++] = data[off_1];
-                        new_seg[new_seg_len++] = old_seg[off_2];
-                    }
-
-                    off_1++;
-                    off_2++;
-                }
-            #endif
                 if (off_1 >= len || off_2 >= old_seg_len)
                     break;
             }
@@ -814,11 +681,7 @@ Retry_Send:
                 new_seg[new_seg_len++] = old_seg[i];
         }
         // log_err("[%lu:%lu:%lu]合并后的seg长度从%lu减少到%lu", cli_id, coro_id, this->key_num, len + old_seg_len, new_seg_len);
-#if READ_FULL_KEY_ON_FP_COLLISION
-        co_return new_seg_len;
-#else
         return new_seg_len;
-#endif
     }
 #endif
 

@@ -31,7 +31,6 @@
 // Modified
 #define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
 #define USE_XRC 1 // 使用XRC
-#define SPLIT_LOCAL_LOCK 1 // 合并/分裂时在本地上锁，参考Sherman
 #define REUSE_MAIN_SEG 1 // 允许reuse main_seg，分裂时不创建新的main_seg
 #define DISABLE_OPTIMISTIC_SPLIT 0 // 禁用客户端的乐观分裂检测，用于性能分解实验
 
@@ -55,6 +54,8 @@
 // 1 bit sign不一致，合并后需要清空CurSeg
 // FP bitmap不一致，改为8bit粒度
 #endif
+
+constexpr int MAX_SEND_CONCURRENCY = 8; // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR
 
 // Config
 #define LARGER_FP_FILTER_GRANULARITY 1 // 使用更大的FP过滤粒度，避免写入FP过滤器前需要先读取。现在每个FP占用8bit粒度。

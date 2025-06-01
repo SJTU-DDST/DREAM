@@ -22,9 +22,9 @@
 #include <functional>
 #define ORDERED_INSERT
 #define ALLOW_KEY_OVERLAP // 不同客户端之间允许key重叠，默认打开，只有RACE-Partitioned才关闭
-#define FIXED_LOAD_SETUP // 最多16个线程执行load，缓解load线程太多导致争用太多的问题
+#define FIXED_LOAD_SETUP // 最多8个线程执行load，缓解load线程太多导致争用太多的问题
 #define ONLY_FIRST_CORO_START // 每台机器只有第一个线程的第一个协程调用cli->start和cli->stop，机器内部使用本地的barrier协调，减少网络开销
-// #define SPLIT_DEV_NUMA // 打开此宏启用多网卡+NUMA亲和
+#define SPLIT_DEV_NUMA // 打开此宏启用多网卡+NUMA亲和
 #ifdef SPLIT_DEV_NUMA
 #include <numa.h>
 #include <pthread.h>
@@ -81,9 +81,9 @@ task<> load(std::vector<Client*>& clis, uint64_t cli_id, uint64_t coro_id)
     size_t server_id = key_server_hash(tmp_key[0], clis.size());
 
 #ifdef FIXED_LOAD_SETUP
-    // Fixed setup: 1 machine, 16 clients, 1 coroutine
+    // Fixed setup: 1 machine, 8 clients, 1 coroutine
     const uint64_t fixed_num_machine = 1;
-    const uint64_t fixed_num_cli = std::min(config.num_cli, 16ul);
+    const uint64_t fixed_num_cli = std::min(config.num_cli, 8ul);
     const uint64_t fixed_num_coro = 1;
     uint64_t num_op = load_num / (fixed_num_machine * fixed_num_cli * fixed_num_coro);
 // #ifdef ALLOW_KEY_OVERLAP

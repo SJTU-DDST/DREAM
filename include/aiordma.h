@@ -349,6 +349,7 @@ class rdma_dev
     }
 
 public:
+    std::counting_semaphore<MAX_SEND_CONCURRENCY> send_semaphore{MAX_SEND_CONCURRENCY};
     ibv_mr *seg_mr{nullptr}; // for XRC post recv
     rdma_dev(const char *dev_name = nullptr, int _ib_port = 1, int _gid_idx = 1);
     ~rdma_dev();

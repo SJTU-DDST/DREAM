@@ -20,7 +20,7 @@ then
     ./ser_cli_var_kv --server --auto_run_client \
     --gid_idx 1 \
     --max_coro 256 --cq_size 64 \
-    --mem_size 241268055040 \
+    --mem_size 91268055040 \
     --num_cli $2 --num_coro $3 --num_machine $4
 
     bash ../sync.sh in $4
@@ -30,7 +30,7 @@ else
 
     for num_cli in `seq $2 $2`;do
         for num_coro in `seq 1 $3`;do
-            for load_num in 10000000;do
+            for load_num in 0;do
                 echo "num_cli" $num_cli "num_coro" $num_coro "load_num" $load_num "op_num" $num_op
                 # ./ser_cli_var_kv \
                 ./ser_cli_var_kv \
@@ -42,18 +42,11 @@ else
                 --num_op $num_op \
                 --pattern_type 2 \
                 --insert_frac 0.0 \
-                --read_frac   1.0 \
-                --update_frac  0.0 \
+                --read_frac   0.0 \
+                --update_frac  1.0 \
                 --delete_frac  0.0 \
                 --read_size     64
             done 
         done
     done
 fi
-
-# YCSB A : read:0.5,update:0.5 zipfian(2)
-# YCSB B : read:0.95,update:0.05 zipfian(2)
-# YCSB C : read:1.0,update:0.0 zipfian(2)
-# YCSB D : read:0.95,insert:0.05 latest(3)
-# YCSB E : scan--不考虑
-# YCSB F : read:0.5,rmq:0.5 zipfian(2) -- RMW ，不考虑

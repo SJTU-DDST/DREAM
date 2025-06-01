@@ -4,32 +4,45 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
-# 颜色和样式
-c = np.array([[102, 194, 165], [252, 141, 98], [141, 160, 203], [231, 138, 195]])
-c = c / 255
+hat = ['//', '\\\\', 'xx', '||', '--', '++']
+markers = ['H', '^', '>', 'D', 'o', 's', 'p', 'x']
+c = np.array([[102, 194, 165], [252, 141, 98], [141, 160, 203], 
+        [231, 138, 195], [166,216,84], [255, 217, 47],
+        [229, 196, 148], [179, 179, 179]])
+c  = c/255
+
 
 # 支持的哈希类型
-hash_types = ['MYHASH', 'SEPHASH', 'RACE-Partitioned', 'Plush']
+hash_types = ['RACE-Partitioned', 'Plush', 'SEPHASH', 'MYHASH']
 
-# 颜色和样式扩展
 colors = {
-    'MYHASH': c[0],
-    'SEPHASH': c[1],
-    'RACE-Partitioned': c[2],
-    'Plush': c[3],
+    'RACE': c[0],
+    'RACE-Partitioned': c[1],
+    'Plush': c[2],
+    'SEPHASH': c[3],
+    'MYHASH': c[4],
+    'MYHASH-NoOpt': c[5],
+    'insert': c[0],
+    'update': c[1],
+    'read': c[2],
 }
-markers = {
-    'MYHASH': 'o',
-    'SEPHASH': 's',
-    'RACE-Partitioned': 'D',
-    'Plush': '^',
-}
+
 hatches = {
-    'MYHASH': '//',
-    'SEPHASH': 'xx',
-    'RACE-Partitioned': '++',
-    'Plush': '..',
+    'RACE': hat[0],
+    'RACE-Partitioned': hat[1],
+    'Plush': hat[2],
+    'SEPHASH': hat[3],
+    'MYHASH': hat[4],
+    'MYHASH-NoOpt': hat[5],
 }
+
+def hash_type_to_label(hash_type):
+    if hash_type == 'MYHASH':
+        return 'DREAM'
+    elif hash_type == 'SEPHASH':
+        return 'SepHash'
+    else:
+        return hash_type
 
 def extract_iops(file_path):
     with open(file_path, 'r') as f:
@@ -78,9 +91,9 @@ for h in hash_types:
             data_dict_32[h].append(0)
 
 # 画左右子图
-fig, axs = plt.subplots(1, 2, figsize=(8, 3.5), sharey=True)
+fig, axs = plt.subplots(1, 2, figsize=(5, 2.5), sharey=True)
 index = np.arange(len(server_nums))
-bar_width = 0.18
+bar_width = 0.2
 
 handles = []
 labels = []
@@ -90,7 +103,7 @@ def thousands_formatter(x, pos):
 
 # 16线程子图（左）
 for i, h in enumerate(hash_types):
-    bar = axs[0].bar(index + (i - 1.5) * bar_width, data_dict_16[h], width=bar_width, color=colors[h], label=h, hatch=hatches[h], edgecolor='black', alpha=0.95)
+    bar = axs[0].bar(index + (i - 1.5) * bar_width, data_dict_16[h], width=bar_width, color=colors[h], label=hash_type_to_label(h), hatch=hatches[h], edgecolor='black', alpha=0.95)
     if i == 0:
         handles = [bar]
         labels = [h]
@@ -107,7 +120,7 @@ axs[0].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
 
 # 32线程子图（右）
 for i, h in enumerate(hash_types):
-    axs[1].bar(index + (i - 1.5) * bar_width, data_dict_32[h], width=bar_width, color=colors[h], label=h, hatch=hatches[h], edgecolor='black', alpha=0.95)
+    axs[1].bar(index + (i - 1.5) * bar_width, data_dict_32[h], width=bar_width, color=colors[h], label=hash_type_to_label(h), hatch=hatches[h], edgecolor='black', alpha=0.95)
 axs[1].set_xlabel('Number of Servers')
 axs[1].set_title('32 Threads')
 axs[1].set_xticks(index)
@@ -116,9 +129,10 @@ axs[1].grid(axis='y', linestyle='-.')
 axs[1].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
 
 # 共享图例，放到上方
-fig.legend(hash_types, loc='upper center', ncol=len(hash_types), bbox_to_anchor=(0.5, 1.04), frameon=False)
-
-plt.tight_layout(rect=[0, 0, 1, 0.97])
+handles, labels = axs[0].get_legend_handles_labels()
+fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=len(labels) / 2, frameon=False)
+    
+plt.tight_layout()
 plt.savefig('../out_png/multi_mns.png', bbox_inches='tight')
 plt.savefig('../out_pdf/multi_mns.pdf', bbox_inches='tight')
 plt.show()
