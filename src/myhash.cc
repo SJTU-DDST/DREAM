@@ -186,8 +186,12 @@ namespace MYHASH
         // 3. Sort Segment
         MainSeg *new_main_seg = (MainSeg *)alloc.alloc(main_seg_size + sizeof(Slot) * SLOT_PER_SEG);
 #if READ_FULL_KEY_ON_FP_COLLISION
-        uint64_t new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, true); // TODO: 每若干次合并批量去重一次
-        // new_main_seg->print(new_seg_len);
+        static int counter = 0;
+        bool dedup = false;
+        if (counter++ % DEDUPLICATE_INTERVAL == 0)
+            dedup = true;
+
+        uint64_t new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, dedup);
 #else
         uint64_t new_seg_len = merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, false);
 #endif
@@ -458,185 +462,232 @@ namespace MYHASH
 #if READ_FULL_KEY_ON_FP_COLLISION // correct but not efficient
     task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth, bool dedup)
     {
-        // 定义排序用的结构体
-        struct SortItem
-        {
-            uint8_t fp;
-            uint8_t fp_2;
-            uint64_t key_hash; // 只在需要时填充
-            bool from_data;    // true:来自data, false:来自old_seg
-            uint64_t index;    // 在原始数组中的索引
-            bool need_read;    // 是否需要读取完整key
-            bool is_delete;    // 是否是删除条目(v_len=0)
-            Slot *slot_ptr;    // 指向原始Slot的指针
-
-            // 排序规则
-            bool operator<(const SortItem &other) const
+        if (dedup) {
+            // 定义排序用的结构体
+            struct SortItem
             {
-                if (fp != other.fp)
-                    return fp < other.fp;
-                if (fp_2 != other.fp_2)
-                    return fp_2 < other.fp_2;
-                if (need_read)
+                uint8_t fp;
+                uint8_t fp_2;
+                uint64_t key_hash; // 只在需要时填充
+                bool from_data;    // true:来自data, false:来自old_seg
+                uint64_t index;    // 在原始数组中的索引
+                bool need_read;    // 是否需要读取完整key
+                bool is_delete;    // 是否是删除条目(v_len=0)
+                Slot *slot_ptr;    // 指向原始Slot的指针
+
+                // 排序规则
+                bool operator<(const SortItem &other) const
                 {
-                    // 如果需要读取key，则比较key_hash
-                    if (key_hash != other.key_hash)
-                        return key_hash < other.key_hash;
-                    // 相同key时，优先保留较新的(data优先，索引大的优先)
+                    if (fp != other.fp)
+                        return fp < other.fp;
+                    if (fp_2 != other.fp_2)
+                        return fp_2 < other.fp_2;
+                    if (need_read)
+                    {
+                        // 如果需要读取key，则比较key_hash
+                        if (key_hash != other.key_hash)
+                            return key_hash < other.key_hash;
+                        // 相同key时，优先保留较新的(data优先，索引大的优先)
+                        if (from_data != other.from_data)
+                            return from_data;
+                        return index > other.index; // 对于相同数组，保留索引更大的(较新的)
+                    }
+                    // 如果不需要读取key，则按来源和索引排序
                     if (from_data != other.from_data)
                         return from_data;
-                    return index > other.index; // 对于相同数组，保留索引更大的(较新的)
+                    return index < other.index;
                 }
-                // 如果不需要读取key，则按来源和索引排序
-                if (from_data != other.from_data)
-                    return from_data;
-                return index < other.index;
-            }
-        };
+            };
 
-        // 1. 统计每个(fp,fp_2)组合的出现次数
-        std::map<std::pair<uint8_t, uint8_t>, int> fp_counts;
+            // 1. 统计每个(fp,fp_2)组合的出现次数
+            std::map<std::pair<uint8_t, uint8_t>, int> fp_counts;
 
-        for (uint64_t i = 0; i < len; i++)
-        {
-            if (data[i].local_depth == local_depth)
+            for (uint64_t i = 0; i < len; i++)
             {
-                fp_counts[{data[i].fp, data[i].fp_2}]++;
-            }
-        }
-
-        for (uint64_t i = 0; i < old_seg_len; i++)
-        {
-            fp_counts[{old_seg[i].fp, old_seg[i].fp_2}]++;
-        }
-
-        // 2. 创建排序项
-        std::vector<SortItem> sort_items;
-        sort_items.reserve(len + old_seg_len);
-
-        // 添加data中的项
-        for (uint64_t i = 0; i < len; i++)
-        {
-            if (data[i].local_depth == local_depth && data[i].is_valid())
-            {
-                auto fp_key = std::make_pair(data[i].fp, data[i].fp_2);
-                SortItem item{
-                    .fp = data[i].fp,
-                    .fp_2 = data[i].fp_2,
-                    .key_hash = 0,
-                    .from_data = true,
-                    .index = i,
-                    .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
-                    .is_delete = false,                 // 初始时不知道是否是删除条目
-                    .slot_ptr = &data[i]};
-                sort_items.push_back(item);
-            }
-        }
-
-        // 添加old_seg中的项
-        for (uint64_t i = 0; i < old_seg_len; i++)
-        {
-            if (old_seg[i].is_valid())
-            {
-                auto fp_key = std::make_pair(old_seg[i].fp, old_seg[i].fp_2);
-                SortItem item{
-                    .fp = old_seg[i].fp,
-                    .fp_2 = old_seg[i].fp_2,
-                    .key_hash = 0,
-                    .from_data = false,
-                    .index = i,
-                    .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
-                    .is_delete = false,                 // 初始时不知道是否是删除条目
-                    .slot_ptr = &old_seg[i]};
-                sort_items.push_back(item);
-            }
-        }
-
-        // 3. 为需要读取完整key的项读取key并计算hash
-        std::unordered_map<uint64_t, KVBlock *> kv_cache; // 避免重复读取相同offset的KV
-
-        for (auto &item : sort_items)
-        {
-            if (item.need_read)
-            {
-                Slot *slot = item.slot_ptr;
-                uint64_t offset = ralloc.ptr(slot->offset);
-
-                if (kv_cache.find(offset) == kv_cache.end())
+                if (data[i].local_depth == local_depth)
                 {
-                    // 未读取过，执行RDMA读取
-                    KVBlock *kv = (KVBlock *)alloc.alloc(slot->len * ALIGNED_SIZE);
-                    memset(kv, 0, slot->len * ALIGNED_SIZE);
-#if CORO_DEBUG
-                    co_await conn->read(offset, seg_rmr.rkey, kv, slot->len * ALIGNED_SIZE, lmr->lkey, std::source_location::current(), std::format("为Slot:{}读取KVBlock, 地址:{}, 长度: {}", slot->to_string(), offset, slot->len * ALIGNED_SIZE));
-#else
-                    co_await conn->read(offset, seg_rmr.rkey, kv, slot->len * ALIGNED_SIZE, lmr->lkey);
-#endif
-                    // 验证KVBlock合法性
-                    if (!kv->is_valid())
+                    fp_counts[{data[i].fp, data[i].fp_2}]++;
+                }
+            }
+
+            for (uint64_t i = 0; i < old_seg_len; i++)
+            {
+                fp_counts[{old_seg[i].fp, old_seg[i].fp_2}]++;
+            }
+
+            // 2. 创建排序项
+            std::vector<SortItem> sort_items;
+            sort_items.reserve(len + old_seg_len);
+
+            // 添加data中的项
+            for (uint64_t i = 0; i < len; i++)
+            {
+                if (data[i].local_depth == local_depth && data[i].is_valid())
+                {
+                    auto fp_key = std::make_pair(data[i].fp, data[i].fp_2);
+                    SortItem item{
+                        .fp = data[i].fp,
+                        .fp_2 = data[i].fp_2,
+                        .key_hash = 0,
+                        .from_data = true,
+                        .index = i,
+                        .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
+                        .is_delete = false,                 // 初始时不知道是否是删除条目
+                        .slot_ptr = &data[i]};
+                    sort_items.push_back(item);
+                }
+            }
+
+            // 添加old_seg中的项
+            for (uint64_t i = 0; i < old_seg_len; i++)
+            {
+                if (old_seg[i].is_valid())
+                {
+                    auto fp_key = std::make_pair(old_seg[i].fp, old_seg[i].fp_2);
+                    SortItem item{
+                        .fp = old_seg[i].fp,
+                        .fp_2 = old_seg[i].fp_2,
+                        .key_hash = 0,
+                        .from_data = false,
+                        .index = i,
+                        .need_read = fp_counts[fp_key] > 1, // 如果有多个相同(fp,fp_2)则需要读取key
+                        .is_delete = false,                 // 初始时不知道是否是删除条目
+                        .slot_ptr = &old_seg[i]};
+                    sort_items.push_back(item);
+                }
+            }
+
+            // 3. 为需要读取完整key的项读取key并计算hash
+            std::unordered_map<uint64_t, KVBlock *> kv_cache; // 避免重复读取相同offset的KV
+
+            for (auto &item : sort_items)
+            {
+                if (item.need_read)
+                {
+                    Slot *slot = item.slot_ptr;
+                    uint64_t offset = ralloc.ptr(slot->offset);
+
+                    if (kv_cache.find(offset) == kv_cache.end())
                     {
-                        kv->k_len = 8; kv->v_len = 0; // 直接删掉
+                        // 未读取过，执行RDMA读取
+                        KVBlock *kv = (KVBlock *)alloc.alloc(slot->len * ALIGNED_SIZE);
+                        memset(kv, 0, slot->len * ALIGNED_SIZE);
+    #if CORO_DEBUG
+                        co_await conn->read(offset, seg_rmr.rkey, kv, slot->len * ALIGNED_SIZE, lmr->lkey, std::source_location::current(), std::format("为Slot:{}读取KVBlock, 地址:{}, 长度: {}", slot->to_string(), offset, slot->len * ALIGNED_SIZE));
+    #else
+                        co_await conn->read(offset, seg_rmr.rkey, kv, slot->len * ALIGNED_SIZE, lmr->lkey);
+    #endif
+                        // 验证KVBlock合法性
+                        if (!kv->is_valid())
+                        {
+                            kv->k_len = 8; kv->v_len = 0; // 直接删掉
+                        }
+                        kv_cache[offset] = kv;
                     }
-                    kv_cache[offset] = kv;
-                }
 
-                KVBlock *kv = kv_cache[offset];
-                item.is_delete = kv->v_len == 0;
+                    KVBlock *kv = kv_cache[offset];
+                    item.is_delete = kv->v_len == 0;
 
-                // 计算key的哈希值
-                if (kv->k_len <= sizeof(uint64_t))
-                {
-                    // 小key直接使用值
-                    memcpy(&item.key_hash, kv->data, kv->k_len);
-                }
-                else
-                {
-                    // 大key计算哈希
-                    item.key_hash = hash(kv->data, kv->k_len);
+                    // 计算key的哈希值
+                    if (kv->k_len <= sizeof(uint64_t))
+                    {
+                        // 小key直接使用值
+                        memcpy(&item.key_hash, kv->data, kv->k_len);
+                    }
+                    else
+                    {
+                        // 大key计算哈希
+                        item.key_hash = hash(kv->data, kv->k_len);
+                    }
                 }
             }
-        }
 
-        // 4. 根据定义的规则排序
-        std::sort(sort_items.begin(), sort_items.end());
+            // 4. 根据定义的规则排序
+            std::sort(sort_items.begin(), sort_items.end());
 
-        // 5. 处理排序后的结果，相同key只保留最新的，且处理删除标记
-        uint64_t new_seg_len = 0;
-        uint64_t last_fp = 0xFF; // 不可能的值
-        uint64_t last_fp2 = 0xFF;
-        uint64_t last_key_hash = 0;
+            // 5. 处理排序后的结果，相同key只保留最新的，且处理删除标记
+            uint64_t new_seg_len = 0;
+            uint64_t last_fp = 0xFF; // 不可能的值
+            uint64_t last_fp2 = 0xFF;
+            uint64_t last_key_hash = 0;
 
-        for (size_t i = 0; i < sort_items.size(); i++)
-        {
-            const auto &item = sort_items[i];
-
-            // 如果需要检查key且与上一个相同则跳过
-            if (item.need_read &&
-                item.fp == last_fp &&
-                item.fp_2 == last_fp2 &&
-                item.key_hash == last_key_hash)
+            for (size_t i = 0; i < sort_items.size(); i++)
             {
-                // 跳过重复的key
-                continue;
-            }
+                const auto &item = sort_items[i];
 
-            // 更新上一个处理的项的信息
-            if (item.need_read)
+                // 如果需要检查key且与上一个相同则跳过
+                if (item.need_read &&
+                    item.fp == last_fp &&
+                    item.fp_2 == last_fp2 &&
+                    item.key_hash == last_key_hash)
+                {
+                    // 跳过重复的key
+                    continue;
+                }
+
+                // 更新上一个处理的项的信息
+                if (item.need_read)
+                {
+                    last_fp = item.fp;
+                    last_fp2 = item.fp_2;
+                    last_key_hash = item.key_hash;
+                }
+
+                // 将Slot添加到结果数组
+                if (!item.is_delete)
+                    new_seg[new_seg_len++] = *item.slot_ptr;
+                // else log_err("[%lu:%lu:%lu]删除了一个条目", cli_id, coro_id, this->key_num);
+            }
+            // log_err("[%lu:%lu:%lu]合并后的seg长度从%lu减少到%lu", cli_id, coro_id, this->key_num, len + old_seg_len, new_seg_len);
+            co_return new_seg_len;
+        } else {
+            std::sort(data, data + len);
+            uint8_t sign = data[0].sign;
+            int off_1 = 0, off_2 = 0;
+            uint64_t new_seg_len = 0;
+            if (len && old_seg_len)
             {
-                last_fp = item.fp;
-                last_fp2 = item.fp_2;
-                last_key_hash = item.key_hash;
+                for (uint64_t i = 0; i < len + old_seg_len; i++)
+                {
+                    if (data[off_1].fp <= old_seg[off_2].fp)
+                    {
+                        if (data[off_1].local_depth == local_depth)
+                            new_seg[new_seg_len++] = data[off_1];
+                        off_1++;
+                    }
+                    else
+                    {
+                        if (old_seg_len == 0)
+                            old_seg[0].print(std::format("[{}:{}:{}]old_seg_len==0", cli_id, coro_id, this->key_num));
+                        new_seg[new_seg_len++] = old_seg[off_2];
+                        off_2++;
+                    }
+                    if (off_1 >= len || off_2 >= old_seg_len)
+                        break;
+                }
             }
 
-            // 将Slot添加到结果数组
-            if (!item.is_delete)
-                new_seg[new_seg_len++] = *item.slot_ptr;
-            // else log_err("[%lu:%lu:%lu]删除了一个条目", cli_id, coro_id, this->key_num);
+            // 处理剩余元素
+            if (off_1 < len)
+            {
+                // memcpy(new_seg + old_seg_len + off_1, data + off_1, (len - off_1) * sizeof(Slot));
+                for (uint64_t i = off_1; i < len; i++)
+                {
+                    if (data[i].local_depth == local_depth)
+                        new_seg[new_seg_len++] = data[i];
+                    // else data[i].print(std::format("[{}:{}:{}]发现过时条目，local_depth:{} != {}", cli_id, coro_id, this->key_num, data[i].local_depth, local_depth));
+                }
+            }
+            else if (off_2 < old_seg_len)
+            {
+                for (uint64_t i = off_2; i < old_seg_len; i++)
+                    new_seg[new_seg_len++] = old_seg[i];
+            }
+            // log_err("[%lu:%lu:%lu]合并后的seg长度从%lu减少到%lu", cli_id, coro_id, this->key_num, len + old_seg_len, new_seg_len);
+            co_return new_seg_len;
         }
-        // log_err("[%lu:%lu:%lu]合并后的seg长度从%lu减少到%lu", cli_id, coro_id, this->key_num, len + old_seg_len, new_seg_len);
-        co_return new_seg_len;
     }
-#else // 去重不干净
+#else
     uint64_t Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth)
     {
         std::sort(data, data + len);

@@ -56,6 +56,7 @@
 #endif
 
 constexpr int MAX_SEND_CONCURRENCY = 8; // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR
+constexpr int DEDUPLICATE_INTERVAL = 128; // 去重的频率
 
 // Config
 #define LARGER_FP_FILTER_GRANULARITY 1 // 使用更大的FP过滤粒度，避免写入FP过滤器前需要先读取。现在每个FP占用8bit粒度。

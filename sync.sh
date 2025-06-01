@@ -27,6 +27,7 @@ else
         sshpass -p '1111' scp congyong@$cli:/home/congyong/out.txt ./out$cli.txt 2>/dev/null || true
         echo -n "cli $cli: "
         grep "Run IOPS" ./out$cli.txt
+        grep "latency" ./out$cli.txt | head -n 1
         cli_num=$3
         coro_num=$4
         for ((cli_id=0; cli_id<cli_num; cli_id++)); do
