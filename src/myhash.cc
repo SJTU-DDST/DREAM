@@ -81,6 +81,7 @@ namespace MYHASH
         assert_require(seg_meta[segloc].srq_num > 0);
         {
             xrc_conn->dev.send_semaphore.acquire(); // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR
+            // FIXME: 目前只限制了SEND的，其他READ/WRITE等请求没有限制，后续可以在do_send处获取信号量并在poll_cq处释放，保证不出错
             auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
             co_await std::move(send_slot);
             xrc_conn->dev.send_semaphore.release();
@@ -92,19 +93,12 @@ namespace MYHASH
         // b. write fp bitmap 同时进行write fp和faa slot_cnt，可能导致因为远端分裂而无效的写入被读到，但读取时会读CurSegment元数据，可以检查depth是否匹配而排除
 #if LARGER_FP_FILTER_GRANULARITY
         auto bit_loc = get_fp_bit(tmp->fp, tmp->fp_2);
-        uintptr_t fp_ptr = segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType);
-        // 远端的seg_meta->fp_bitmap[bit_loc]写入00000001。这里不用seg_meta，先alloc.alloc申请一个8byte buffer，写入00000001，然后写入远端。
-        FpBitmapType *tmp_fp_bitmap = (FpBitmapType *)alloc.alloc(sizeof(FpBitmapType));
         seg_meta[segloc].fp_bitmap[bit_loc] = 1;
-        *tmp_fp_bitmap = 1;
-        memcpy(tmp, &seg_meta[segloc], sizeof(CurSegMeta));
-        auto write_fp_bitmap = conn->write(fp_ptr, seg_rmr.rkey, tmp_fp_bitmap, sizeof(FpBitmapType), lmr->lkey);
+        CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+        my_seg_meta->fp_bitmap[bit_loc] = 1;
+        co_await conn->write(segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType), seg_rmr.rkey, my_seg_meta->fp_bitmap + bit_loc, sizeof(FpBitmapType), lmr->lkey);
 #endif
-
         co_await std::move(faa_slot_cnt);
-#if LARGER_FP_FILTER_GRANULARITY
-        co_await std::move(write_fp_bitmap);
-#endif
 
         auto remote_sign = fetch & 1;
         auto remote_slot_cnt = (fetch & ((1 << SIGN_AND_SLOT_CNT_BITS) - 1)) >> 1;
@@ -132,8 +126,10 @@ namespace MYHASH
                 co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, 3 * sizeof(uint64_t), lmr->lkey); // don't read bitmap
                 seg_meta[segloc].local_depth = my_seg_meta->local_depth; // 顺便同步元数据，但因为seg_meta不是用alloc.alloc分配的，不能直接读过去
                 seg_meta[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
-                seg_meta[segloc].main_seg_len = my_seg_meta->main_seg_len;
-
+                seg_meta[segloc].main_seg_len = my_seg_meta->main_seg_len; // IMPORTANT: 相比dir->segs[segloc]，seg_meta[segloc]多了srq_num和fp_bitmap
+                dir->segs[segloc].local_depth = my_seg_meta->local_depth;
+                dir->segs[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
+                dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len;
                 co_await Split(segloc, segptr, my_seg_meta);
             }
             send_cnt = 0;
@@ -188,19 +184,21 @@ namespace MYHASH
 #if READ_FULL_KEY_ON_FP_COLLISION
         static int counter = 0;
         bool dedup = false;
-        if (counter++ % DEDUPLICATE_INTERVAL == 0)
+        if (local_depth >= MAX_DEPTH - 1 || SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len >= MAX_MAIN_SIZE)
+            dedup = true;
+        else if (counter++ % DEDUPLICATE_INTERVAL == 0)
             dedup = true;
 
         uint64_t new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, dedup);
 #else
-        uint64_t new_seg_len = merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, false);
-#endif
+        uint64_t new_seg_len = merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth);
+#endif  
         FpInfo fp_info[MAX_FP_INFO] = {};
         cal_fpinfo(new_main_seg->slots, new_seg_len, fp_info); // SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len
 
-        log_merge("将segloc:%lu/%lu的%d个CurSeg条目合并到%d个MainSeg条目", seg_loc, (1ull << global_depth) - 1, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len);
+        log_merge("将segloc:%lu/%lu的%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", seg_loc, (1ull << global_depth) - 1, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len, new_seg_len);
         // 4. Split (为了减少协程嵌套层次的开销，这里就不抽象成单独的函数了)
-        if (dir->segs[seg_loc].main_seg_len >= MAX_MAIN_SIZE)
+        if (dir->segs[seg_loc].main_seg_len >= MAX_MAIN_SIZE && local_depth < MAX_DEPTH)
         {
             // 为了避免覆盖bug，同时Merge/Local Split中都额外更新了一倍的DirEntry
             // 因此Global Split不用处理DirEntry翻倍操作，只需要更新Global Depth
@@ -217,14 +215,16 @@ namespace MYHASH
             uint64_t pattern;
             uint64_t off1 = 0, off2 = 0;
             KVBlock *kv_block = (KVBlock *)alloc.alloc(130 * ALIGNED_SIZE);
-
             for (uint64_t i = 0; i < new_seg_len; i++) // SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len
             {
                 dep_bit = (new_main_seg->slots[i].dep >> dep_off) & 1;
                 if (dep_off == 3)
                 {
-                    if (!ralloc.ptr(new_main_seg->slots[i].offset))
-                        continue;
+                    if (!ralloc.ptr(new_main_seg->slots[i].offset)) {
+                        log_err("[%lu:%lu:%lu]new_main_seg->slots[%lu]的偏移地址为0，不合法条目?", cli_id, coro_id, this->key_num, i);
+                        new_main_seg->slots[i].print("Invalid Slot");
+                        // continue;
+                    }
                     // if dep_off == 3 (Have consumed all info in dep bits), read && construct new dep
 #ifdef TOO_LARGE_KV
                     co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,
@@ -232,24 +232,20 @@ namespace MYHASH
 #else
 #if CORO_DEBUG
                     co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block,
-                                            new_main_seg->slots[i].len * ALIGNED_SIZE, lmr->lkey, std::source_location::current(), std::format("[{}:{}]segloc:{}读取KVBlock地址{}", cli_id, coro_id, seg_loc, ralloc.ptr(new_main_seg->slots[i].offset))); // IMPORTANT: 读取完整KV，合并可以参考。
+                                            new_main_seg->slots[i].len * ALIGNED_SIZE, lmr->lkey, std::source_location::current(), std::format("[{}:{}]segloc:{}读取KVBlock地址{:x}, slot:{}", cli_id, coro_id, seg_loc, ralloc.ptr(new_main_seg->slots[i].offset), new_main_seg->slots[i].to_string(i)));
 #else
                     co_await conn->read(ralloc.ptr(new_main_seg->slots[i].offset), seg_rmr.rkey, kv_block, new_main_seg->slots[i].len * ALIGNED_SIZE, lmr->lkey);
 #endif
 #endif
                     // 验证KVBlock合法性
-                    if (!kv_block->is_valid())
-                        continue;
+                    if (!kv_block->is_valid()) {
+                        log_err("[%lu:%lu:%lu]new_main_seg->slots[%lu]的KV条目不合法（写入溢出了？），k_len:%lu v_len:%lu", cli_id, coro_id, this->key_num, i, kv_block->k_len, kv_block->v_len);
+                        new_main_seg->slots[i].print("Invalid Slot");
+                        // continue;
+                    }
 
                     pattern = (uint64_t)hash(kv_block->data, kv_block->k_len);
                     new_main_seg->slots[i].dep = pattern >> (local_depth + 1);
-                    // if (kv_block->k_len != 8)
-                    // {
-                    //     new_main_seg->slots[i].print();
-                    //     uint64_t cros_seg_loc = get_seg_loc(pattern, local_depth+1);
-                    //     log_err("[%lu:%lu:%lu]kv_block k_len:%lu v_len:%lu key:%lu value:%s cros_seg_loc:%lx",cli_id,coro_id,this->key_num, kv_block->k_len, kv_block->v_len, *(uint64_t *)kv_block->data, kv_block->data + 8, cros_seg_loc);
-                    //     exit(-1);
-                    // }
                 }
                 if (dep_bit)
                     new_seg_2->slots[off2++] = new_main_seg->slots[i];
@@ -265,8 +261,10 @@ namespace MYHASH
             uintptr_t new_cur_ptr = ralloc.alloc(sizeof(CurSeg), true);
 #if REUSE_MAIN_SEG
             uintptr_t new_main_ptr1 = dir->segs[seg_loc].main_seg_ptr;
-            if (new_main_ptr1 == 0)
+            if (new_main_ptr1 == 0) {
                 new_main_ptr1 = ralloc.alloc(sizeof(MainSeg), true);
+                dir->segs[seg_loc].main_seg_ptr = new_main_ptr1;
+            }
             uintptr_t new_main_ptr2 = ralloc.alloc(sizeof(MainSeg), true);
 #else
             uintptr_t new_main_ptr1 = ralloc.alloc(sizeof(Slot) * off1);
@@ -396,22 +394,22 @@ namespace MYHASH
 
 #if REUSE_MAIN_SEG
         uintptr_t new_main_ptr = dir->segs[seg_loc].main_seg_ptr;
-        if (new_main_ptr == 0)
-            new_main_ptr = ralloc.alloc(sizeof(MainSeg), true);
+        if (new_main_ptr == 0) {
+            new_main_ptr = ralloc.alloc(sizeof(MainSeg), true); // 大小是2 * MAX_MAIN_SIZE，因为还需要额外存储SLOT_PER_SEG个Slot
+            dir->segs[seg_loc].main_seg_ptr = new_main_ptr; // 更新dir中的main_seg_ptr
+        }
 #else
         uintptr_t new_main_ptr = ralloc.alloc(new_seg_len * sizeof(Slot), true); // IMPORTANT: 在MN分配new main seg，注意 FIXME: ralloc没有free功能 // main_seg_size + sizeof(Slot) * SLOT_PER_SEG
 #endif
-        // uint64_t new_main_len = new_seg_len; // dir->segs[seg_loc].main_seg_len + SLOT_PER_SEG;
-        wo_wait_conn->pure_write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots,
-                                 sizeof(Slot) * new_seg_len, lmr->lkey);
-        // co_await wo_wait_conn->write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots,
-        //                             sizeof(Slot) * new_seg_len, lmr->lkey);
+        if (sizeof(Slot) * new_seg_len > sizeof(MainSeg)) {
+            log_err("[%lu:%lu:%lu]new_main_ptr:%lx, new_seg_len:%lu, offset:%lx, size:%lu > sizeof(MainSeg):%lu, reallocate...", cli_id, coro_id, this->key_num, new_main_ptr, new_seg_len, ralloc.offset(new_main_ptr), sizeof(Slot) * new_seg_len, sizeof(MainSeg));
+            assert_require(false); // 如果达到depth上限，MainSeg的大小可能超出sizeof(MainSeg)，可以在每次溢出时翻倍容量，目前简单退出
+        }
+        wo_wait_conn->pure_write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots, sizeof(Slot) * new_seg_len, lmr->lkey);
 
         // b. Update MainSegPtr/Len and fp_bitmap
         cur_seg->seg_meta.main_seg_ptr = new_main_ptr;
         cur_seg->seg_meta.main_seg_len = new_seg_len; // main_seg_size / sizeof(Slot) + SLOT_PER_SEG;
-        // if (main_seg_size / sizeof(Slot) + SLOT_PER_SEG != new_seg_len)
-        //     log_err("新的main_seg_len从原来的%lu，去除掉过时条目后减少为%lu", main_seg_size / sizeof(Slot) + SLOT_PER_SEG, new_seg_len);
         this->offset[seg_loc].offset = 0;
         memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(uint64_t) * 16);
         co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
@@ -743,5 +741,34 @@ namespace MYHASH
         delete_value.data = nullptr;
         co_await this->insert(key, &delete_value);
         co_return;
+    }
+
+    task<> Client::check_slots(Slot *slots, uint64_t len, std::string desc, std::source_location loc) {
+        KVBlock *kv_block = (KVBlock *)alloc.alloc(130 * ALIGNED_SIZE);
+        for (uint64_t i = 0; i < len; i++)
+        {
+            auto &slot = slots[i];
+            co_await conn->read(ralloc.ptr(slot.offset), seg_rmr.rkey, kv_block, slot.len * ALIGNED_SIZE, lmr->lkey);
+            if (!kv_block->is_valid())
+            {
+                log_err("在%s:%d的[%s]检查中发现不合法的slots[%lu], offset:%lx, ptr: %lx",
+                        loc.file_name(), loc.line(), desc.c_str(),
+                        i, slot.offset, ralloc.ptr(slot.offset));
+                    // ", loc.file_name(), loc.line(), desc.c_str());
+                slot.print(i);
+                kv_block->print("不合法的KVBlock");
+            }
+        }
+    }
+
+    task<> Client::check_slot(uint64_t offset, std::string desc, std::source_location loc) {
+        KVBlock *kv_block = (KVBlock *)alloc.alloc(130 * ALIGNED_SIZE);
+        co_await conn->read(ralloc.ptr(offset), seg_rmr.rkey, kv_block, ALIGNED_SIZE * 130, lmr->lkey);
+        if (!kv_block->is_valid() && kv_block->k_len != 0) {
+            log_err("在%s:%d的[%s]检查中发现不合法的slot, offset:%lx, ptr: %lx",
+                    loc.file_name(), loc.line(), desc.c_str(),
+                    offset, ralloc.ptr(offset));
+            kv_block->print("不合法的KVBlock");
+        }
     }
 }

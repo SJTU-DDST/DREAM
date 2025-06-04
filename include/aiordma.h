@@ -106,12 +106,10 @@ struct Slot
     
     bool is_valid() const
     {
-        // Check if offset is within valid range: 100 <= offset <= 99999999999
-        if (offset < 10000 || offset > 99999999999ULL)
+        if (!is_valid_ptr(offset))
             return false;
 #if MODIFIED
-        // Check if local_depth is valid: 0 < local_depth <= 16
-        if (local_depth == 0 || local_depth > 16)
+        if (local_depth == 0 || local_depth > 63)
             return false;
 #endif
         return true;
@@ -180,11 +178,11 @@ struct CurSeg
 } __attribute__((aligned(1)));
 
 constexpr uint64_t MAX_FP_INFO = 256;
-constexpr uint64_t MAX_DEPTH = 16;
+constexpr uint64_t MAX_DEPTH = 20;
 constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
 struct FpInfo
 {
-    uint8_t num; // 数量
+    uint8_t num; // 数量 TODO: 改成开始的条目位置，和结束的条目位置。
     operator uint64_t()
     {
         return *(uint64_t *)this;
@@ -198,7 +196,7 @@ struct DirEntry
     uintptr_t cur_seg_ptr;
     uintptr_t main_seg_ptr;
     uint64_t main_seg_len;
-    FpInfo fp[MAX_FP_INFO];
+    FpInfo fp[MAX_FP_INFO]; // TODO: 可以1024？
     bool operator==(const DirEntry &other) const
     {
         return cur_seg_ptr == other.cur_seg_ptr && main_seg_ptr == other.main_seg_ptr &&
@@ -463,8 +461,8 @@ class rdma_worker : noncopyable
 public:
     rdma_dev &dev;
     ibv_cq *cq{nullptr};
-    std::shared_ptr<std::vector<rdma_coro>> coros; // shared rdma_coro *coros{nullptr};
-    std::shared_ptr<uint32_t> free_head;
+    std::vector<rdma_coro> coros; // 协程池
+    uint32_t free_head = 0;      // 空闲协程链表头
     // std::mutex free_head_mutex; // 用于保护 free_head 的互斥锁
     uint64_t _max_segloc{0};
 

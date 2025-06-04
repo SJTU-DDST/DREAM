@@ -20,7 +20,7 @@ then
     ./ser_cli_var_kv --server --auto_run_client \
     --gid_idx 1 \
     --max_coro 256 --cq_size 64 \
-    --mem_size 91268055040 \
+    --mem_size 191268055040 \
     --num_cli $2 --num_coro $3 --num_machine $4
 
     bash ../sync.sh in $4
@@ -30,7 +30,7 @@ else
 
     for num_cli in `seq $2 $2`;do
         for num_coro in `seq 1 $3`;do
-            for load_num in 0;do
+            for load_num in 10000000;do
                 echo "num_cli" $num_cli "num_coro" $num_coro "load_num" $load_num "op_num" $num_op
                 # ./ser_cli_var_kv \
                 ./ser_cli_var_kv \

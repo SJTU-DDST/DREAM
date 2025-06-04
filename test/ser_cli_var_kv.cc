@@ -86,14 +86,14 @@ task<> load(std::vector<Client*>& clis, uint64_t cli_id, uint64_t coro_id)
     const uint64_t fixed_num_cli = std::min(config.num_cli, 8ul);
     const uint64_t fixed_num_coro = 1;
     uint64_t num_op = load_num / (fixed_num_machine * fixed_num_cli * fixed_num_coro);
-// #ifdef ALLOW_KEY_OVERLAP
-//     Generator *gen = new seq_gen(load_num);
-// #else
-    Generator *gen = new seq_gen(num_op);
-// #endif
-    xoshiro256pp key_chooser;
-
     if (config.machine_id == 0 && coro_id == 0 && cli_id < fixed_num_cli) {
+        // #ifdef ALLOW_KEY_OVERLAP
+        //     Generator *gen = new seq_gen(load_num);
+        // #else
+        Generator *gen = new seq_gen(num_op);
+        // #endif
+        xoshiro256pp key_chooser;
+
         for (uint64_t i = 0; i < num_op; i++)
         {
             if (i % 100000 == 0 && !cli_id)
@@ -195,16 +195,16 @@ task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t
         if (op_frac < config.insert_frac)
         {
 #ifdef ALLOW_KEY_OVERLAP
-            GenKey(load_num + gen->operator()(key_chooser()), tmp_key);
+            GenKey(load_num + gen->operator()(INSERT_INPUT), tmp_key);
 #else
             GenKey(load_num +
                        (config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
-                       gen->operator()(key_chooser()),
+                       gen->operator()(INSERT_INPUT),
                    tmp_key);
-                //    log_err("cli_id:%lu coro_id:%lu insert key:%lu", cli_id, coro_id, tmp_key[0]);
+            //    log_err("cli_id:%lu coro_id:%lu insert key:%lu", cli_id, coro_id, tmp_key[0]);
 #endif
-            co_await clis[server_id]->insert(&key, &value);
+            co_await clis[server_id]->insert(&key, &value); // insert必须用seq_gen，不然会重复插入
         }
         else if (op_frac < read_frac)
         {

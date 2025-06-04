@@ -63,6 +63,8 @@ namespace MYHASH
 #else
         uint64_t merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth);
 #endif
+        task<> check_slots(Slot *slots, uint64_t len, std::string desc = "", std::source_location loc = std::source_location::current());
+        task<> check_slot(uint64_t offset = 0x3380, std::string desc = "", std::source_location loc = std::source_location::current());
     };
 
     class Server : public SEPHASH::Server

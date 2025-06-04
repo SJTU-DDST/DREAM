@@ -403,27 +403,15 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
     if (max_coros > 8)
     {
         assert_require(max_coros < rdma_coro_none);
-        if (!free_head)
+        coros.resize(max_coros);
+        free_head = 0;
+        coros[0].id = 0;
+        for (int i = 1; i < max_coros; ++i)
         {
-            free_head = std::make_shared<uint32_t>(0);
-            // log_err("创建free_head: %p", free_head.get());
+            coros[i].id = i;
+            coros[i - 1].next = i;
         }
-        else
-        {
-            // log_err("free_head: %p已经存在，不需要创建", free_head.get());
-        }
-        if (!coros) {
-            coros = std::make_shared<std::vector<rdma_coro>>(max_coros);
-            assert_require(coros); // assert_require(coros && is_times_ofN((uintptr_t)coros, sizeof(rdma_coro)));
-            (*coros)[0].id = 0;
-            for (int i = 1; i < max_coros; ++i)
-            {
-                (*coros)[i].id = i;
-                (*coros)[i - 1].next = i;
-            }
-            (*coros)[max_coros - 1].next = rdma_coro_none;
-            // log_err("创建coros: %p, free_head: %p, max_coros: %d", coros.get(), free_head.get(), max_coros);
-        } // else log_err("coros: %p已经存在，不需要创建", coros.get());
+        coros[max_coros - 1].next = rdma_coro_none;
     }
     if (!cq) {
         assert_require(cq = dev.create_cq(cq_size));
@@ -540,18 +528,16 @@ rdma_worker::~rdma_worker()
 }
 rdma_coro *rdma_worker::alloc_coro(uint16_t conn_id DEBUG_LOCATION_DEFINE DEBUG_CORO_DEFINE)
 {
-    // std::lock_guard<std::mutex> lock(free_head_mutex); // 加锁保护 free_head
-    if (*free_head == rdma_coro_none)
+    if (free_head == rdma_coro_none)
         return nullptr;
-    auto local_head = *free_head;
-    // assert_require(local_head < max_coros);
-    // rdma_coro *res = coros + local_head;
-    rdma_coro *res = &(*coros)[local_head]; // 使用 &(*coros)[index] 获取指针
+    auto local_head = free_head;
+    rdma_coro *res = &coros[local_head];
 #if ALLOC_CORO_THREAD_SAFE
+    // 线程安全版本需要原子操作，但free_head不是指针了
     while (!__atomic_compare_exchange_n(&free_head, &local_head, res->next, false, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
-        res = coros + local_head;
+        res = &coros[local_head];
 #else
-    *free_head = res->next;
+    free_head = res->next;
 #endif
     res->next = rdma_coro_none;
     res->coro_state = coro_state_invaild;
@@ -562,20 +548,22 @@ rdma_coro *rdma_worker::alloc_coro(uint16_t conn_id DEBUG_LOCATION_DEFINE DEBUG_
     res->coro_desc = desc;
     res->start_time = std::chrono::steady_clock::now();
 #endif
+    // log_err("从worker:%p,coros:%p中分配cor:%p, ID: %u, CtxID: %u, File: %s:%d", this, &coros, res, res->id, conn_id, res->location.file_name(), res->location.line());
     return res;
 }
 
 void rdma_worker::free_coro(rdma_coro *cor)
 {
-    // std::lock_guard<std::mutex> lock(free_head_mutex); // 加锁保护 free_head
     cor->ctx = 0;
-    cor->next = *free_head;
+    cor->next = free_head;
 #if ALLOC_CORO_THREAD_SAFE
+    // 线程安全版本需要原子操作，但free_head不是指针了
     while (!__atomic_compare_exchange_n(&free_head, &cor->next, cor->id, false, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
         ;
 #else
-    *free_head = cor->id;
+    free_head = cor->id;
 #endif
+    // log_err("将cor:%p, ID: %u, CtxID: %u, File: %s:%d, 放回worker:%p, coros:%p的free_head中", cor, cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), this, &coros);
 }
 
 #if CORO_DEBUG
@@ -588,24 +576,24 @@ void rdma_worker::print_running_coros()
     for (uint16_t i = 0; i < max_coros; ++i)
     {
         // rdma_coro *cor = &coros[i];
-        rdma_coro *cor = &(*coros)[i]; // 使用 &(*coros)[index] 获取指针
-        if (cor->ctx != 0)
-        {
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cor->start_time).count();
-            if (elapsed >= 10)
-            {
-                log_err("终止超时coro ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed);
-                cor->coro_state |= (coro_state_error | coro_state_ready);
-                if (cor->coro_state & coro_state_inited)
-                    cor->resume_handler();
-            }
-            std::string location = std::string(cor->location.file_name()) + ":" + std::to_string(cor->location.line());
-            if (elapsed >= 5)
-            {
-                // location_count[location]++;
-                cor->print(std::format("运行超时，协程ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed));
-            }
-        }
+        rdma_coro *cor = &coros[i]; // 使用 &(*coros)[index] 获取指针
+        // if (cor->ctx != 0)
+        // {
+        //     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - cor->start_time).count();
+        //     if (elapsed >= 10)
+        //     {
+        //         log_err("终止超时coro ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed);
+        //         cor->coro_state |= (coro_state_error | coro_state_ready);
+        //         if (cor->coro_state & coro_state_inited)
+        //             cor->resume_handler();
+        //     }
+        //     std::string location = std::string(cor->location.file_name()) + ":" + std::to_string(cor->location.line());
+        //     if (elapsed >= 5)
+        //     {
+        //         // location_count[location]++;
+        //         cor->print(std::format("运行超时，协程ID: %u, CtxID: %u, File: %s:%d, 时间: %ld s", cor->id, cor->ctx, cor->location.file_name(), cor->location.line(), elapsed));
+        //     }
+        // }
     }
 
     // 输出每种 file:line 的出现次数
@@ -652,7 +640,7 @@ void rdma_worker::stop_periodic_task()
 task<> rdma_worker::cancel_coros(uint16_t conn_id, std::vector<int> &&cancel_list, volatile int &finish_flag)
 {
     for (auto e : cancel_list)
-        if (auto &&cor = (*coros)[e]; cor.ctx == conn_id)
+        if (auto &&cor = coros[e]; cor.ctx == conn_id)
         {
             cor.coro_state |= (coro_state_error | coro_state_ready);
             if (cor.coro_state & coro_state_inited)
@@ -806,7 +794,7 @@ void rdma_worker::worker_loop()
             }
 
             // auto cor = coros + wc.wr_id;
-            rdma_coro *cor = &(*coros)[wc.wr_id]; // 使用 &(*coros)[index] 获取指针
+            rdma_coro *cor = &coros[wc.wr_id]; // 使用 &(*coros)[index] 获取指针
             if (wc.status != IBV_WC_SUCCESS)
             {
                 log_err("got bad completion with status: 0x%x, vendor syndrome: 0x%x", wc.status, wc.vendor_err);
@@ -1245,11 +1233,11 @@ rdma_conn::~rdma_conn()
 
 void rdma_conn::release_working_coros()
 {
-    if (!worker || !worker->coros || !worker->pending_tasks)
+    if (!worker || !worker->pending_tasks)
         return;
     std::vector<int> cancel_list;
     for (int i = 0; i < worker->max_coros; ++i)
-        if ((*worker->coros)[i].ctx == conn_id) cancel_list.push_back(i);
+        if (worker->coros[i].ctx == conn_id) cancel_list.push_back(i);
     volatile int finish_flag = 0;
     if (worker->loop_flag) // WARNING: should not close conn during stopping work loop
         worker->pending_tasks->enqueue(worker->cancel_coros(conn_id, std::move(cancel_list), finish_flag));
@@ -1308,7 +1296,7 @@ void rdma_conn::handle_recv_setup(const void *buf, size_t len, ConnInfo conn_inf
 
     assert_require(!(modify_qp_to_init() ||
               modify_qp_to_rtr(exc->qp_num, exc->lid, &exc->gid) ||
-              (worker->coros && modify_qp_to_rts())));
+              (modify_qp_to_rts())));
 
     send_exchange(rdma_exchange_proto_ready, conn_info);
 }
@@ -1529,13 +1517,7 @@ rdma_future rdma_conn::do_send(ibv_send_wr *wr_begin, ibv_send_wr *wr_end DEBUG_
     assert_check(cor);
     wr_end->wr_id = cor->id;
     wr_end->send_flags |= IBV_SEND_SIGNALED;
-    // if (wr_end->opcode == IBV_WR_SEND) {
-    //     log_err("发送send请求，wr_id: %d", cor->id);
-    // } else if (wr_end->opcode == IBV_WR_RDMA_READ) {
-    //     log_err("发送read请求，wr_id: %d", cor->id);
-    // }
     ibv_send_wr *bad;
-    // assert_check(0 == ibv_post_send(qp, wr_begin, &bad));
     int res = ibv_post_send(qp, wr_begin, &bad);
     if (res != 0) {
         log_err("ibv_post_send failed: %d", res);

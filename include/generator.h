@@ -3,6 +3,8 @@
 #include <cmath>
 #include <random>
 
+constexpr double INSERT_INPUT = -1.0; // 用于表示插入操作的输入
+
 class Generator
 {
 public:
@@ -123,6 +125,8 @@ public:
     }
     uint64_t operator()(double u)
     {
+        if (u == INSERT_INPUT)
+            return ++items; // 如果是插入操作，返回下一个可用的key
         double uz = u * zetan;
         if (uz < 1.)
             return 0;
@@ -141,6 +145,8 @@ public:
 
     uint64_t operator()(double u)
     {
+        if (u == INSERT_INPUT)
+            return ++items; // 如果是插入操作，返回下一个可用的key
         return items - zipfian_(u);
     }
 

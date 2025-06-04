@@ -782,7 +782,7 @@ task<std::tuple<uintptr_t, uint64_t>> Client::search(Slice *key, Slice *value)
         sum_cost.push_level_cnt(1);
         co_return std::make_tuple(slot_ptr, slot);
     }
-    // log_err("[%lu:%lu]No match key :%lu", cli_id, coro_id, *(uint64_t *)key->data);
+    log_err("[%lu:%lu]No match key :%lu", cli_id, coro_id, *(uint64_t *)key->data);
     perf.push_search();
     sum_cost.push_level_cnt(1);
     co_return std::make_tuple(0ull, 0);
@@ -935,6 +935,7 @@ Retry:
 
 task<> Client::update(Slice *key,Slice *value)
 {
+    perf.start_perf();
     char data[1024];
     Slice ret_value;
     ret_value.data = data;
@@ -952,6 +953,8 @@ task<> Client::update(Slice *key,Slice *value)
 Retry:
     alloc.ReSet(sizeof(Directory)+kvblock_len);
     if (retry_cnt++ == 1000) {
+        perf.push_perf("update");
+        sum_cost.push_retry_cnt(retry_cnt);
         co_return;
     }
     // 1st RTT: Using RDMA doorbell batching to fetch two combined buckets
@@ -975,9 +978,12 @@ Retry:
         // 3rd RTT: Setting the key-value block to full zero
         if (!co_await conn->cas_n(slot_ptr, rmr.rkey, slot, *(uint64_t*)tmp))
             goto Retry;
-    }else{
-        // log_err("[%lu:%lu]No match key for %lu to update",cli_id,coro_id,*(uint64_t*)key->data);
+    } else {
+        log_err("[%lu:%lu]No match key for %lu to update",cli_id,coro_id,*(uint64_t*)key->data);
+        co_await this->insert(key, value);
     }
+    sum_cost.push_retry_cnt(retry_cnt);
+    perf.push_insert();
 }
 
 } // NAMESPACE RACE

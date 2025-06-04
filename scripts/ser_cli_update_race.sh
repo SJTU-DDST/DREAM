@@ -36,7 +36,7 @@ else
                 ./ser_cli_var_kv \
                 --server_ip 192.168.98.70 --num_machine $4 --num_cli $num_cli --num_coro $num_coro \
                 --gid_idx 1 \
-                --max_coro 256 --cq_size 64 \
+                --max_coro 32768 --cq_size 64 \
                 --machine_id $1  \
                 --load_num $load_num \
                 --num_op $num_op \

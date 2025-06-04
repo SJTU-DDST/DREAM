@@ -56,7 +56,8 @@
 #endif
 
 constexpr int MAX_SEND_CONCURRENCY = 8; // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR
-constexpr int DEDUPLICATE_INTERVAL = 128; // 去重的频率
+// FIXME: 目前只限制了SEND的，还有小概率出错，后续可以在do_send处获取信号量并在poll_cq处释放，保证不出错
+constexpr int DEDUPLICATE_INTERVAL = 128; // 对于zipf99，线程数少实际上热键更集中
 
 // Config
 #define LARGER_FP_FILTER_GRANULARITY 1 // 使用更大的FP过滤粒度，避免写入FP过滤器前需要先读取。现在每个FP占用8bit粒度。
@@ -146,7 +147,7 @@ constexpr int DEDUPLICATE_INTERVAL = 128; // 去重的频率
 const uint32_t cache_line_size = 64;
 
 inline bool is_valid_ptr(uintptr_t ptr){
-    return ptr >= 10000 && ptr < (1ULL << 48);
+    return ptr > 0 && ptr < (1ULL << 48);
 }
 
 template <typename T>
