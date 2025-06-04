@@ -129,7 +129,7 @@ namespace MYHASH
                 seg_meta[segloc].main_seg_len = my_seg_meta->main_seg_len; // IMPORTANT: 相比dir->segs[segloc]，seg_meta[segloc]多了srq_num和fp_bitmap
                 dir->segs[segloc].local_depth = my_seg_meta->local_depth;
                 dir->segs[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
-                dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len;
+                // dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len; FIXME: 会卡住
                 co_await Split(segloc, segptr, my_seg_meta);
             }
             send_cnt = 0;
