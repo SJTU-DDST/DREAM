@@ -927,7 +927,11 @@ void cal_fpinfo(Slot *main_seg, uint64_t main_seg_len, FpInfo *fp_info)
     uint64_t err;
     for (uint64_t i = 0; i < main_seg_len; i++)
     {
-        fp_info[main_seg[i].fp].num++;
+        uint8_t fp_val = main_seg[i].fp;
+        if (fp_info[fp_val].num == UINT8_MAX) {
+            log_err("Warning: fp_info[%u].num overflow at index %lu", fp_val, i);
+        }
+        fp_info[fp_val].num++;
     }
 }
 
@@ -1219,16 +1223,37 @@ Retry:
     uint64_t segloc = get_seg_loc(pattern, dir->global_depth);
 
     // 2. Get SegPtr, MainSegPtr and Slot Offset
-    // RTT1: 读取CurSegMeta中的{slot_cnt, local_depth, main_seg_ptr, main_seg_len}, CurSeg bitmap的对应bit, FPTable的对应条目(先读整个FPTable), MainSeg的预测Slots(先不预测，根据FPTable读取)
-    // FPTable改成记录每个FP的起始位置，读取时读取连续的两个条目作为起始和终止(下一个的起始-1)
+    // RTT1: 读取CurSegMeta(不含bitmap), CurSeg bitmap的对应bit, MainSeg的预测Slots
+    // TODO: FPTable改成记录每个FP的起始位置，读取时读取连续的两个条目作为起始和终止(下一个的起始-1)
 
     uintptr_t cur_seg_ptr = dir->segs[segloc].cur_seg_ptr;
     CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
     auto read_meta = conn->read(cur_seg_ptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, 3 * sizeof(uint64_t), lmr->lkey);
     auto read_bit_map = conn->read(cur_seg_ptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType), seg_rmr.rkey, &my_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
-    FpInfo *my_fp_info = (FpInfo *)alloc.alloc(sizeof(FpInfo) * MAX_FP_INFO);
-    auto fp_offset = offsetof(Directory, segs) + segloc * sizeof(DirEntry) + offsetof(DirEntry, fp);
-    auto read_fp_info = conn->read(seg_rmr.raddr + fp_offset, seg_rmr.rkey, my_fp_info, sizeof(FpInfo) * MAX_FP_INFO, lmr->lkey);
+
+    uint64_t start_pos = 0, end_pos = 0;
+    for (uint64_t i = 0; i <= UINT8_MAX; i++) {
+        if (i == UINT8_MAX || i >= pattern_fp1) break;
+        start_pos += dir->segs[segloc].fp[i].num;
+    }
+    end_pos = start_pos + dir->segs[segloc].fp[pattern_fp1].num;
+
+    if (start_pos == 0 && end_pos == 0) { // 第一次读取时读取整个FPTable
+        FpInfo *my_fp_info = (FpInfo *)alloc.alloc(sizeof(FpInfo) * MAX_FP_INFO);
+        auto fp_offset = offsetof(Directory, segs) + segloc * sizeof(DirEntry) + offsetof(DirEntry, fp);
+        co_await conn->read(seg_rmr.raddr + fp_offset, seg_rmr.rkey, my_fp_info, sizeof(FpInfo) * MAX_FP_INFO, lmr->lkey);
+        memcpy(dir->segs[segloc].fp, my_fp_info, sizeof(FpInfo) * MAX_FP_INFO);
+    }
+
+    uint64_t main_size = (end_pos - start_pos) * sizeof(Slot); // 根据FPTable预测的范围读取MainSeg Slots
+    uintptr_t main_seg_ptr = dir->segs[segloc].main_seg_ptr;
+    bool is_in_mainseg = (main_seg_ptr != 0 && main_size != 0);
+    std::optional<rdma_future> read_cur_seg, read_main_seg;
+    Slot *curseg_slots = nullptr, *main_seg = nullptr;
+    if (is_in_mainseg) {
+        main_seg = (Slot *)alloc.alloc(main_size);
+        read_main_seg.emplace(conn->read(main_seg_ptr + start_pos * sizeof(Slot), seg_rmr.rkey, main_seg, main_size, lmr->lkey));
+    }
 
     co_await std::move(read_meta);
     dir->segs[segloc].local_depth = my_seg_meta->local_depth;
@@ -1243,7 +1268,7 @@ Retry:
     seg_meta[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
     seg_meta[segloc].main_seg_len = my_seg_meta->main_seg_len;
 
-    uintptr_t main_seg_ptr = dir->segs[segloc].main_seg_ptr;
+    main_seg_ptr = dir->segs[segloc].main_seg_ptr;
     uint64_t main_seg_len = dir->segs[segloc].main_seg_len; // 过时了？我们的len=300，实际上已经有几千了。如果读到的main范围里没有，读取fptable？
     // TODO: fptable直接存这个fp的start和end？这样可以只读这一个
     // fptable预测要留着，因为只有插入时会失效，而纯更新/读取不会
@@ -1256,22 +1281,12 @@ Retry:
         // dir->print();
         // goto Retry; // main_seg_ptr=0时不读取MainSeg，无需重试
     }
-
-    co_await std::move(read_fp_info);
-    memcpy(dir->segs[segloc].fp, my_fp_info, sizeof(FpInfo) * MAX_FP_INFO);
-    uint64_t start_pos = 0, end_pos = main_seg_len;
-    for (uint64_t i = 0; i <= UINT8_MAX; i++) {
-        if (i == UINT8_MAX || i >= pattern_fp1) break;
-        start_pos += dir->segs[segloc].fp[i].num;
-    }
-    end_pos = start_pos + dir->segs[segloc].fp[pattern_fp1].num;
-    uint64_t main_size = (end_pos - start_pos) * sizeof(Slot);
+    
     // log_err("为fp1:%d读取segloc:%lu的范围为[%lu,%lu)的%d个Slot", pattern_fp1, segloc, start_pos, end_pos, dir->segs[segloc].fp[pattern_fp1].num);
 
     // 3. Read SegMeta && MainSlots 
     // RTT2: 读取FPTable过滤后的MainSeg，如果bitmap中对应bit为1，则读取CurSeg中的对应Slots
     co_await std::move(read_bit_map);
-    Slot *curseg_slots = nullptr, *main_seg = nullptr;
 #if LARGER_FP_FILTER_GRANULARITY
     bool is_in_curseg = my_seg_meta->fp_bitmap[bit_loc] != 0;
     uint64_t slots_to_read = std::min<uint64_t>(my_seg_meta->slot_cnt, SLOT_PER_SEG);
@@ -1283,20 +1298,11 @@ Retry:
     bool is_in_curseg = (my_seg_meta->fp_bitmap[bit_loc] & bit_info) == bit_info;
     uint64_t slots_to_read = SLOT_PER_SEG;
 #endif
-    bool is_in_mainseg = (main_seg_ptr != 0 && main_size != 0);
-    std::optional<rdma_future> read_cur_seg, read_main_seg;
     if (is_in_curseg)
     {
         curseg_slots = (Slot *)alloc.alloc(sizeof(Slot) * slots_to_read);
         read_cur_seg.emplace(conn->read(cur_seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, curseg_slots, sizeof(Slot) * slots_to_read, lmr->lkey));
     }
-    if (is_in_mainseg)
-    {
-        main_seg = (Slot *)alloc.alloc(main_size);
-        read_main_seg.emplace(conn->read(main_seg_ptr + start_pos * sizeof(Slot), seg_rmr.rkey, main_seg, main_size, lmr->lkey));
-    }
-    if (is_in_curseg) co_await std::move(*read_cur_seg);
-    if (is_in_mainseg) co_await std::move(*read_main_seg);
 
     // 4. Check Depth && MainSegPtr
     if (is_in_mainseg && my_seg_meta->main_seg_ptr != this->offset[segloc].main_seg_ptr)
@@ -1310,7 +1316,7 @@ Retry:
             this->offset[segloc].offset = 0;
             this->offset[segloc].main_seg_ptr = dir->segs[segloc].main_seg_ptr;
             goto Retry;
-        } 
+        }
         // 更新所有指向此Segment的DirEntry
         // log_err("[%lu:%lu:%lu]stale main_seg_ptr for segloc:%lx with old:%lx new:%lx",cli_id,coro_id,this->key_num,segloc,my_seg_meta->main_seg_ptr,this->offset[segloc].main_seg_ptr);
         uint64_t new_local_depth = my_seg_meta->local_depth;
@@ -1327,6 +1333,8 @@ Retry:
             dir->segs[segloc].local_depth = my_seg_meta->local_depth;
         }
         // 怎么同步信息；同步哪些信息
+        if (is_in_curseg) co_await std::move(*read_cur_seg);
+        if (is_in_mainseg) co_await std::move(*read_main_seg);
         goto Retry;
     }
     // log_err("read at seg_loc:%lu with main_ptr:%lx",segloc,my_seg_meta->main_seg_ptr);
@@ -1343,6 +1351,7 @@ Retry:
     // 在CurSeg中，相同FP的Slot，更新的Slot会被写入在更靠后的位置
     if (is_in_curseg) // CurSeg比MainSeg更新
     {
+        co_await std::move(*read_cur_seg);
         for (uint64_t i = slots_to_read - 1; i != -1; i--)
         {
 #if MODIFIED
@@ -1375,7 +1384,8 @@ Retry:
 
     // 5.2 Find In Main FIXME: 逻辑不对？如果两端还是相同的fp，需要继续读取。还可能要同步FPTable。另外，如果读取的范围内不含对应fp，则需要完全读取。
     // 在Main中，相同FP的Slot，更新的Slot会被写入在更靠前的位置
-    if (main_seg && res == nullptr)
+    if (is_in_mainseg) co_await std::move(*read_main_seg);
+    if (is_in_mainseg && res == nullptr)
     {
         // 合并两次循环，同时查找fp匹配+fp2匹配的条目和fp匹配但fp2不匹配的条目
         for (uint64_t i = 0; i < end_pos - start_pos; i++)
