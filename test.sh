@@ -115,7 +115,7 @@ set_hash_type() {
     # 如果哈希类型包含连字符"-"，只保留连字符前的部分
     if [[ "$hash_type" == *"-"* ]]; then
         local base_type=${hash_type%%-*}
-        echo "原始哈希类型 ${hash_type} 包含连字符，将使用基础类型: ${base_type}"
+        # echo "原始哈希类型 ${hash_type} 包含连字符，将使用基础类型: ${base_type}"
         hash_type=$base_type
     fi
     
@@ -130,8 +130,8 @@ set_hash_type() {
     fi
     
     # 验证替换成功
-    echo "已设置哈希类型为: ${hash_type}"
-    grep "^#define HASH_TYPE" "$common_h_path"
+    # echo "已设置哈希类型为: ${hash_type}"
+    # grep "^#define HASH_TYPE" "$common_h_path"
 }
 
 # 函数：重置哈希类型为MYHASH
@@ -147,11 +147,11 @@ toggle_key_overlap() {
     if [ "$action" == "disable" ]; then
         # 注释掉 ALLOW_KEY_OVERLAP 定义
         sed -i 's/^#define ALLOW_KEY_OVERLAP/\/\/#define ALLOW_KEY_OVERLAP/' "$var_kv_path"
-        echo "已禁用 ALLOW_KEY_OVERLAP"
+        # echo "已禁用 ALLOW_KEY_OVERLAP"
     else
         # 恢复 ALLOW_KEY_OVERLAP 定义
         sed -i 's/^\/\/#define ALLOW_KEY_OVERLAP/#define ALLOW_KEY_OVERLAP/' "$var_kv_path"
-        echo "已恢复 ALLOW_KEY_OVERLAP"
+        # echo "已恢复 ALLOW_KEY_OVERLAP"
     fi
 }
 
@@ -180,7 +180,7 @@ set_fp_collision_mode() {
     
     # 修改设置
     sed -i "s/#define READ_FULL_KEY_ON_FP_COLLISION [0-1]/#define READ_FULL_KEY_ON_FP_COLLISION ${value}/" "$common_h_path"
-    echo "设置 READ_FULL_KEY_ON_FP_COLLISION 为 ${value}"
+    # echo "设置 READ_FULL_KEY_ON_FP_COLLISION 为 ${value}"
 }
 # mainseg大小到一定阈值再批量去重一次？这样可以减少重复键的数量，但尾部延迟增加一些
 
@@ -192,11 +192,11 @@ toggle_optimistic_split() {
     if [ "$disable" == "disable" ]; then
         # 将 DISABLE_OPTIMISTIC_SPLIT 设置为 1
         sed -i 's/#define DISABLE_OPTIMISTIC_SPLIT 0/#define DISABLE_OPTIMISTIC_SPLIT 1/' "$common_h_path"
-        echo "已禁用乐观分裂 (DISABLE_OPTIMISTIC_SPLIT=1)"
+        # echo "已禁用乐观分裂 (DISABLE_OPTIMISTIC_SPLIT=1)"
     else
         # 将 DISABLE_OPTIMISTIC_SPLIT 设置为 0
         sed -i 's/#define DISABLE_OPTIMISTIC_SPLIT 1/#define DISABLE_OPTIMISTIC_SPLIT 0/' "$common_h_path"
-        echo "已启用乐观分裂 (DISABLE_OPTIMISTIC_SPLIT=0)"
+        # echo "已启用乐观分裂 (DISABLE_OPTIMISTIC_SPLIT=0)"
     fi
 }
 
@@ -410,7 +410,7 @@ for hash_type in "${hash_types[@]}"; do
             fi
         done
         
-        echo "处理完成 hash_type=${hash_type}, num_cli=${num_cli}"
+        echo "处理完成 experiment=${experiment_type}, hash_type=${hash_type}, num_cli=${num_cli}"
     done
     
     # echo "运行 ${hash_type} 完成"

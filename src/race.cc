@@ -320,12 +320,13 @@ task<> Client::insert(Slice *key, Slice *value)
 Retry:
     // log_err("[%lu:%lu:%lu] op_key:%lu",machine_id,cli_id,coro_id,this->op_key);
     alloc.ReSet(sizeof(Directory) + kvblock_len);
-    if (retry_cnt++ == 1000)
+    if (retry_cnt++ == 10000000)
     {
         // log_err("[%lu:%lu]Fail to insert after %lu retries", cli_id, coro_id, retry_cnt);
         perf.push_insert();
         sum_cost.end_insert();
         sum_cost.push_retry_cnt(retry_cnt);
+        log_err("[%lu:%lu]Fail to insert after %lu retries", cli_id, coro_id, retry_cnt);
         co_return;
     }
     // Read Segment Ptr From CCEH_Cache
@@ -902,7 +903,8 @@ task<> Client::remove(Slice *key)
     retry_cnt = 0;
 Retry:
     alloc.ReSet(sizeof(Directory));
-    if (retry_cnt++ == 1000) {
+    if (retry_cnt++ == 10000000) {
+        log_err("[%lu:%lu]retry_cnt exceed %d for key:%lx",cli_id,coro_id,retry_cnt,*(uint64_t*)key->data);
         co_return;
     }
     // 1st RTT: Using RDMA doorbell batching to fetch two combined buckets
@@ -952,9 +954,10 @@ task<> Client::update(Slice *key,Slice *value)
     retry_cnt = 0;
 Retry:
     alloc.ReSet(sizeof(Directory)+kvblock_len);
-    if (retry_cnt++ == 1000) {
+    if (retry_cnt++ == 10000000) {
         perf.push_perf("update");
         sum_cost.push_retry_cnt(retry_cnt);
+        log_err("[%lu:%lu]retry_cnt exceed %d for key:%lx",cli_id,coro_id,retry_cnt,*(uint64_t*)key->data);
         co_return;
     }
     // 1st RTT: Using RDMA doorbell batching to fetch two combined buckets

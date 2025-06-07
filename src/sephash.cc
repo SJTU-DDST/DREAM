@@ -611,8 +611,13 @@ task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uin
     // 定义排序用的结构体
     struct SortItem
     {
+#if EMBED_FULL_KEY
+        uint64_t fp;
+        uint64_t fp_2;
+#else
         uint8_t fp;
         uint8_t fp_2;
+#endif
         uint64_t key_hash; // 只在需要时填充
         bool from_data;    // true:来自data, false:来自old_seg
         uint64_t index;    // 在原始数组中的索引
@@ -928,9 +933,9 @@ void cal_fpinfo(Slot *main_seg, uint64_t main_seg_len, FpInfo *fp_info)
     for (uint64_t i = 0; i < main_seg_len; i++)
     {
         uint8_t fp_val = main_seg[i].fp;
-        if (fp_info[fp_val].num == UINT8_MAX) {
-            log_err("Warning: fp_info[%u].num overflow at index %lu", fp_val, i);
-        }
+        // if (fp_info[fp_val].num == UINT8_MAX) { // FIXME: this can overflow in update workloads, 因为很久才dedup一次，另外很久dedup一次可能影响ycsb这样的混合更新查询。（影响不大因为ycsb ops=10M）
+        //     log_err("Warning: fp_info[%u].num overflow at index %lu", fp_val, i);
+        // }
         fp_info[fp_val].num++;
     }
 }
@@ -1208,8 +1213,12 @@ task<std::tuple<uintptr_t, uint64_t>> Client::search(Slice *key, Slice *value)
     uint64_t pattern = (uint64_t)hash(key->data, key->len);
     uint64_t pattern_fp1 = fp(pattern);
     uint64_t pattern_fp2 = fp2(pattern);
+#if EMBED_FULL_KEY
+    uint64_t key1 = *(uint64_t *)key->data;
+    uint64_t key2 = *(uint64_t *)(key->data + sizeof(uint64_t));
+#endif
 #if LARGER_FP_FILTER_GRANULARITY
-    auto bit_loc = get_fp_bit(pattern_fp1, pattern_fp2); // 目前完全没用上
+    auto bit_loc = get_fp_bit(pattern_fp1, pattern_fp2);
 #else
     auto [bit_loc, bit_info] = get_fp_bit(pattern_fp1,pattern_fp2);
 #endif
@@ -1359,7 +1368,11 @@ Retry:
 #else
             bool match_local_depth = true; // SepHash不需要匹配local_depth
 #endif
+#if EMBED_FULL_KEY
+            if (curseg_slots[i] != 0 && curseg_slots[i].fp == key1 && curseg_slots[i].fp_2 == key2 && match_local_depth && curseg_slots[i].is_valid())
+#else
             if (curseg_slots[i] != 0 && curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].dep == dep_info && curseg_slots[i].fp_2 == pattern_fp2 && match_local_depth && curseg_slots[i].is_valid())
+#endif
             {
                 uintptr_t kv_ptr = ralloc.ptr(curseg_slots[i].offset);
                 if (kv_ptr == 0)
@@ -1370,7 +1383,9 @@ Retry:
                 co_await conn->read(kv_ptr, seg_rmr.rkey, kv_block, (curseg_slots[i].len) * ALIGNED_SIZE, lmr->lkey);
 #endif
                 // log_err("[%lu:%lu:%lu]read at segloc:%lx cur_seg with: pattern_fp1:%lx pattern_fp2:%lx dep_info:%x seg slot:fp:%x fp2:%x dep:%x",cli_id,coro_id,this->key_num,segloc,pattern_fp1,pattern_fp2,dep_info,curseg_slots[i].fp,curseg_slots[i].fp_2,curseg_slots[i].dep);
+#if !EMBED_FULL_KEY
                 if (memcmp(key->data, kv_block->data, key->len) == 0)
+#endif
                 {
                     slot_ptr = cur_seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta) + i * sizeof(Slot);
                     slot_content = curseg_slots[i];
@@ -1395,7 +1410,11 @@ Retry:
 #else
             bool match_fp2 = true;
 #endif
+#if EMBED_FULL_KEY
+            if (main_seg[i] != 0 && main_seg[i].fp == key1 && main_seg[i].fp_2 == key2 && main_seg[i].is_valid())
+#else
             if (main_seg[i] != 0 && main_seg[i].fp == pattern_fp1 && main_seg[i].dep == dep_info && match_fp2 && main_seg[i].is_valid())
+#endif
             {
                 uintptr_t kv_ptr = ralloc.ptr(main_seg[i].offset);
                 if (kv_ptr == 0)
@@ -1410,7 +1429,9 @@ Retry:
 #endif
 
                 // 检查是否是我们要找的key
+#if !EMBED_FULL_KEY
                 if (memcmp(key->data, kv_block->data, key->len) == 0)
+#endif
                 {
                     // 找到了匹配的key，更新最佳匹配
                     // 在MainSeg中，更靠前的位置表示更新的版本，所以第一个匹配的是最新的

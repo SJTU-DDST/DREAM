@@ -33,6 +33,7 @@
 #define USE_XRC 1 // 使用XRC
 #define REUSE_MAIN_SEG 1 // 允许reuse main_seg，分裂时不创建新的main_seg
 #define DISABLE_OPTIMISTIC_SPLIT 0 // 禁用客户端的乐观分裂检测，用于性能分解实验
+#define EMBED_FULL_KEY 1 // 在CurSeg中嵌入完整key，避免合并时需要读取完整key。即使Slot大于8B，也可以通过单次SEND发送，且因为FAA slot_cnt不会读取/合并不完整的条目。
 
 // #define SEND_MULTI_SEG 1 // 启用多个TempSeg，用于测试多个TempSeg的性能。
 // 1. 允许client在满时分裂 OK
@@ -57,7 +58,7 @@
 
 constexpr int MAX_SEND_CONCURRENCY = 8; // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR
 // FIXME: 目前只限制了SEND的，还有小概率出错，后续可以在do_send处获取信号量并在poll_cq处释放，保证不出错
-constexpr int DEDUPLICATE_INTERVAL = 128; // 对于zipf99，线程数少实际上热键更集中
+constexpr int DEDUPLICATE_INTERVAL = 4; // 对于zipf99，线程数少实际上热键更集中
 
 // Config
 #define LARGER_FP_FILTER_GRANULARITY 1 // 使用更大的FP过滤粒度，避免写入FP过滤器前需要先读取。现在每个FP占用8bit粒度。

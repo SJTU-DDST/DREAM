@@ -50,13 +50,23 @@ constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(u
 
 struct Slot
 {
-    uint8_t fp; // : 8 removed
+#if EMBED_FULL_KEY
+    uint8_t local_depth;
+    uint8_t len : 3;
+    uint8_t sign : 1; // 用来表示split delete信息
+    uint8_t dep : 4;
+    uint64_t offset : 48;
+    uint64_t fp;
+    uint64_t fp_2;
+#else
+    uint8_t fp;
     uint8_t len : 3;
     uint8_t sign : 1; // 用来表示split delete信息
     uint8_t dep : 4;
     uint64_t offset : 48;
     uint8_t fp_2;
     uint8_t local_depth;
+#endif
     operator uint64_t()
     {
         return *(uint64_t *)this;

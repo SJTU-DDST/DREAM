@@ -24,7 +24,9 @@
 #define ALLOW_KEY_OVERLAP // 不同客户端之间允许key重叠，默认打开，只有RACE-Partitioned才关闭
 #define FIXED_LOAD_SETUP // 最多8个线程执行load，缓解load线程太多导致争用太多的问题
 #define ONLY_FIRST_CORO_START // 每台机器只有第一个线程的第一个协程调用cli->start和cli->stop，机器内部使用本地的barrier协调，减少网络开销
-#define SPLIT_DEV_NUMA // 打开此宏启用多网卡+NUMA亲和
+// #if MODIFIED
+// #define SPLIT_DEV_NUMA // 打开此宏启用多网卡+NUMA亲和
+// #endif
 #ifdef SPLIT_DEV_NUMA
 #include <numa.h>
 #include <pthread.h>
@@ -183,12 +185,19 @@ task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t
     double read_frac = config.insert_frac + config.read_frac;
     double update_frac = config.insert_frac + config.read_frac + config.update_frac;
     xoshiro256pp op_chooser;
-    xoshiro256pp key_chooser;
+    xoshiro256pp read_key_chooser, update_key_chooser, delete_key_chooser;
     uint64_t num_op = config.num_op / (config.num_machine * config.num_cli * config.num_coro);
     // uint64_t load_avr = load_num / (config.num_machine * config.num_cli * config.num_coro); // if load_num == 0, load_avr == 0, causing key overlap, and key range is [0, op_per_coro]
     uint64_t load_avr = num_op; // this is correct, key cannot overlap, key range is [coros * num_op, (coros + 1) * num_op]
+#ifdef KEY_COUNT
+    std::unordered_map<uint64_t, int> update_key_count;
+    std::unordered_map<uint64_t, int> search_key_count;
+#endif
+
+    static int count = 0;
     for (uint64_t i = 0; i < num_op; i++)
     {
+        count++;
         if (i % 100000 == 0 && !cli_id)
             log_err("cli_id:%lu coro_id:%lu Run Progress: %lu/%lu", cli_id, coro_id, i, num_op);
         op_frac = op_chooser();
@@ -210,12 +219,19 @@ task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t
         {
             ret_value.len = 0;
 #ifdef ALLOW_KEY_OVERLAP
-            GenKey(gen->operator()(key_chooser()), tmp_key);
+            GenKey(gen->operator()(read_key_chooser()), tmp_key);
+            if (count % 1000 == 0)
+            {
+                // log_err("cli_id:%lu coro_id:%lu gen:%p search key:%lu", cli_id, coro_id, gen, tmp_key[0]);
+            }
 #else
             GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
-                       gen->operator()(key_chooser()),
+                       gen->operator()(read_key_chooser()),
                    tmp_key);
+#endif
+#ifdef KEY_COUNT
+            search_key_count[tmp_key[0]]++;
 #endif
             co_await clis[server_id]->search(&key, &ret_value);
             // if (ret_value.len != value.len || memcmp(ret_value.data, value.data, value.len) != 0)
@@ -229,12 +245,19 @@ task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t
         {
             // update
 #ifdef ALLOW_KEY_OVERLAP
-            GenKey(gen->operator()(key_chooser()), tmp_key);
+            GenKey(gen->operator()(update_key_chooser()), tmp_key);
+            if (count % 1000 == 0)
+            {
+                // log_err("cli_id:%lu coro_id:%lu gen:%p update key:%lu", cli_id, coro_id, gen, tmp_key[0]);
+            }
 #else
             GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
-                       gen->operator()(key_chooser()),
+                       gen->operator()(update_key_chooser()),
                    tmp_key);
+#endif
+#ifdef KEY_COUNT
+            update_key_count[tmp_key[0]]++;
 #endif
             co_await clis[server_id]->update(&key, &update_value);
             // auto [slot_ptr, slot] = co_await cli->search(&key, &ret_value);
@@ -251,11 +274,11 @@ task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t
         {
             // delete
 #ifdef ALLOW_KEY_OVERLAP
-            GenKey(gen->operator()(key_chooser()), tmp_key);
+            GenKey(gen->operator()(delete_key_chooser()), tmp_key);
 #else
             GenKey((config.machine_id * config.num_cli * config.num_coro + cli_id * config.num_coro + coro_id) *
                            load_avr +
-                       gen->operator()(key_chooser()),
+                       gen->operator()(delete_key_chooser()),
                    tmp_key);
 #endif
             co_await clis[server_id]->remove(&key);
@@ -287,6 +310,39 @@ task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t
     barrier->arrive_and_wait();
 #else
     co_await clis[0]->stop();
+#endif
+#ifdef KEY_COUNT
+    // 输出统计信息
+    int total_update_count = 0;
+    for (const auto& [key, count] : update_key_count) {
+        total_update_count += count;
+    }
+    int total_search_count = 0;
+    for (const auto& [key, count] : search_key_count) {
+        total_search_count += count;
+    }
+
+    // 获取更新次数最多的前5个key
+    std::vector<std::pair<uint64_t, int>> update_vec(update_key_count.begin(), update_key_count.end());
+    std::sort(update_vec.begin(), update_vec.end(), [](const auto& a, const auto& b) {
+        return a.second > b.second;
+    });
+    // 获取查询次数最多的前5个key
+    std::vector<std::pair<uint64_t, int>> search_vec(search_key_count.begin(), search_key_count.end());
+    std::sort(search_vec.begin(), search_vec.end(), [](const auto& a, const auto& b) {
+        return a.second > b.second;
+    });
+
+    printf("Total update count: %d\n", total_update_count);
+    printf("Top 5 updated keys:\n");
+    for (size_t i = 0; i < std::min<size_t>(5, update_vec.size()); ++i) {
+        printf("  key: %lu, count: %d\n", update_vec[i].first, update_vec[i].second);
+    }
+    printf("Total search count: %d\n", total_search_count);
+    printf("Top 5 searched keys:\n");
+    for (size_t i = 0; i < std::min<size_t>(5, search_vec.size()); ++i) {
+        printf("  key: %lu, count: %d\n", search_vec[i].first, search_vec[i].second);
+    }
 #endif
     co_return;
 }
