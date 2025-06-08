@@ -116,101 +116,10 @@ def get_iops_data(ratio_dir, hash_type):
     
     return iops_values
 
-def plot_mixed(ax):
-    # 收集数据
-    data = {}
-    ratio_dirs = sorted(get_ratio_dirs())
-    
-    all_hash_types = set()
-    for ratio_dir in ratio_dirs:
-        hash_types = get_hash_types(ratio_dir)
-        all_hash_types.update(hash_types)
-    
-    # 使用自定义顺序排序哈希类型，而不是字母顺序
-    all_hash_types = sort_hash_types(list(all_hash_types))
-    
-    for ratio_dir in ratio_dirs:
-        ratio_match = re.match(r'data_insert(\d+)_read(\d+)', ratio_dir)
-        if ratio_match:
-            insert_ratio = int(ratio_match.group(1)) // 10
-            read_ratio = int(ratio_match.group(2)) // 10
-            ratio_label = f"{insert_ratio}:{read_ratio}"
-            
-            data[ratio_label] = {}
-            
-            for hash_type in all_hash_types:
-                iops_values = get_iops_data(ratio_dir, hash_type)
-                if iops_values:
-                    avg_iops = np.mean(iops_values)
-                    data[ratio_label][hash_type] = avg_iops
-    
-    # 设置柱状图参数
-    n_hash_types = len(all_hash_types)
-    bar_width = 0.2  # Make bars narrower
-    opacity = 1.0
-    index = np.arange(len(data.keys()))
-    
-    # 设置网格线在柱子下方
-    ax.set_axisbelow(True)
-    
-    # 计算每组柱状图的偏移量，使它们并排显示而不重叠
-    offsets = np.linspace(-(n_hash_types-1)*bar_width/2, (n_hash_types-1)*bar_width/2, n_hash_types)
-    
-    # 绘制柱状图
-    for i, hash_type in enumerate(all_hash_types):
-        values = []
-        for ratio_label in data.keys():
-            values.append(data[ratio_label].get(hash_type, 0))
-        
-        position = index + offsets[i]  # Apply offset for each hash type
-        ax.bar(position, values, bar_width,
-               color=colors[hash_type],
-               edgecolor='black',
-               lw=1.2,
-               hatch=hatches[hash_type],
-               label=hash_type_to_label(hash_type))
-    
-    # 计算DREAM相对于其他哈希的性能提升百分比
-    for i, ratio_label in enumerate(data.keys()):
-        if 'MYHASH' in data[ratio_label]:  # MYHASH是DREAM
-            dream_value = data[ratio_label]['MYHASH']
-            improvements = []
-            
-            for hash_type in all_hash_types:
-                if hash_type != 'MYHASH' and hash_type in data[ratio_label] and data[ratio_label][hash_type] > 0:
-                    improvement = (dream_value / data[ratio_label][hash_type] - 1) * 100
-                    improvements.append(improvement)
-            
-            if improvements:
-                min_improvement = min(improvements)
-                max_improvement = max(improvements)
-                # improvement_text = f"{min_improvement:.1f}%\n{max_improvement:.1f}%"
-                
-                # # 在柱状图上方显示提升范围
-                # ax.text(i, dream_value * 1.05, improvement_text, ha='center', va='bottom', fontsize=8)
-                print(f"Insert/Search Ratio: {ratio_label}, DREAM Improvement: {min_improvement:.1f}% ~ {max_improvement:.1f}%")
-    
-    # 设置图表属性
-    ax.set_xlabel('Insert/Search Ratio')
-    ax.set_ylabel('Throughput (Kops)')
-    ax.set_title('(a) Hybrid Workloads')
-    ax.set_xticks(index)
-    ax.set_xticklabels(data.keys(), rotation=0)
-    
-    # 优化Y轴刻度显示
-    # def thousands_formatter(x, pos):
-    #     return f'{int(x):,}'
-    
-    # ax.yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
-    
-    # 添加网格线以便于读取数据
-    ax.grid(axis='y', linestyle='-.')
-
-def plot_ycsb(ax):
+def plot_ycsb(ax, thread_str):
     # 定义YCSB数据目录
     ycsb_types = ['a', 'b', 'c', 'd']
     data = {}
-    
     all_hash_types = set()
     # 收集所有哈希类型
     for ycsb_type in ycsb_types:
@@ -218,24 +127,19 @@ def plot_ycsb(ax):
         if os.path.exists(ycsb_dir):
             hash_types = [d for d in os.listdir(ycsb_dir) if os.path.isdir(os.path.join(ycsb_dir, d))]
             all_hash_types.update(hash_types)
-    
     # 使用自定义顺序排序哈希类型
     all_hash_types = sort_hash_types(list(all_hash_types))
-    
     # 收集每种YCSB类型的数据
     for ycsb_type in ycsb_types:
         ycsb_dir = f"../data/data_ycsb_{ycsb_type}"
         if not os.path.exists(ycsb_dir):
             continue
-            
         label = f"{ycsb_type.upper()}"
         data[label] = {}
-        
         for hash_type in all_hash_types:
-            thread_dir = os.path.join(ycsb_dir, hash_type, "224")
+            thread_dir = os.path.join(ycsb_dir, hash_type, thread_str)
             if not os.path.exists(thread_dir):
                 continue
-            
             iops_values = []
             for file_name in os.listdir(thread_dir):
                 if file_name.startswith("out"):
@@ -243,7 +147,6 @@ def plot_ycsb(ax):
                     iops = extract_iops(file_path)
                     if iops:
                         iops_values.append(iops)
-            
             if iops_values:
                 avg_iops = np.mean(iops_values)
                 data[label][hash_type] = avg_iops
@@ -262,7 +165,6 @@ def plot_ycsb(ax):
     
     # 绘制柱状图
     for i, hash_type in enumerate(all_hash_types):
-        print(i, hash_type)
         values = []
         for label in data.keys():
             values.append(data[label].get(hash_type, 0))
@@ -290,16 +192,12 @@ def plot_ycsb(ax):
             if improvements:
                 min_improvement = min(improvements)
                 max_improvement = max(improvements)
-                # improvement_text = f"{min_improvement:.1f}%\n{max_improvement:.1f}%"
-                
-                # # 在柱状图上方显示提升范围
-                # ax.text(i, dream_value * 1.05, improvement_text, ha='center', va='bottom', fontsize=8)
                 print(f"YCSB Type: {label}, DREAM Improvement: {min_improvement:.1f}% ~ {max_improvement:.1f}%")
     
     # 设置图表属性
     ax.set_xlabel('YCSB Workload')
     ax.set_ylabel('Throughput (Kops)')
-    ax.set_title('(b) YCSB Benchmarks')
+    ax.set_title(f'{thread_str} Threads')
     ax.set_xticks(index)
     ax.set_xticklabels(data.keys(), rotation=0)
     
@@ -507,20 +405,14 @@ def plot_breakdown(ax):
     ax.grid(axis='y', linestyle='-.')
 
 if __name__ == "__main__":
-    # 创建 1x4 子图布局
-    fig, axs = plt.subplots(1, 4, figsize=(10, 2.5))
+    # 创建 1x2 子图布局
+    fig, axs = plt.subplots(1, 2, figsize=(5, 2.5))
     
-    # Fig 1: Mixed Workload
-    plot_mixed(axs[0])
+    # Fig 1: Mixed Workload (1 thread)
+    plot_ycsb(axs[0], "1")
     
-    # Fig 2: YCSB
-    plot_ycsb(axs[1])
-    
-    # Fig 3: 分解（原本是变长KV，现交换顺序）
-    plot_breakdown(axs[2])
-    
-    # Fig 4: 变长KV（原本是分解，现交换顺序）
-    plot_variable_kv(axs[3])
+    # Fig 2: YCSB (224 threads)
+    plot_ycsb(axs[1], "224")
 
     # 收集所有子图的图例信息
     all_handles = []
@@ -549,25 +441,17 @@ if __name__ == "__main__":
     # 计算前两个子图的中心位置
     # 由于我们有4个子图，每个占据25%的宽度，前两个子图总共占50%的宽度
     # 所以中心位置应该在25%的位置(0.25)
-    fig.legend(ordered_handles, ordered_labels, loc='upper center', 
-            bbox_to_anchor=(0.21, 1.21), ncol=3, frameon=True)
-    
-    # 为第三张子图（现在是分解）创建单独的图例
-    handles3, labels3 = axs[2].get_legend_handles_labels()
-    fig.legend(handles3, labels3, loc='upper center',
-            bbox_to_anchor=(0.6, 1.21), ncol=2, frameon=True)
-    
-    # 为第四张子图（现在是变长KV）创建单独的图例
-    handles4, labels4 = axs[3].get_legend_handles_labels()
-    fig.legend(handles4, labels4, loc='upper center',
-            bbox_to_anchor=(0.885, 1.21), ncol=2, frameon=True)
+    fig.legend(ordered_handles, ordered_labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=3, frameon=False)
+    # 共享图例，放到上方
+    # handles, labels = axs[0].get_legend_handles_labels()
+    # fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.15), ncol=len(labels) / 2, frameon=False)
     
     # 调整整体布局
     plt.tight_layout()
     
     # 保存图片
-    plt.savefig('../out_png/misc.png', bbox_inches='tight')
-    plt.savefig('../out_pdf/misc.pdf', bbox_inches='tight')
+    plt.savefig('../out_png/ycsb.png', bbox_inches='tight')
+    plt.savefig('../out_pdf/ycsb.pdf', bbox_inches='tight')
     
     # 显示图表
     plt.show()

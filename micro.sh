@@ -1,14 +1,16 @@
-# ../test.sh insert run "1,4,8,16,32,56,112,168" MYHASH
+../test.sh read run "168,224" MYHASH
 # ../test.sh read run "1,4,8,16,32,56,112,168" MYHASH,RACE
 # ../test.sh update run "1,4,8,16,32,56,112,168" MYHASH,RACE
 # ../test.sh update_zipf99 run "1,4,8,16,32,56,112,168" MYHASH,RACE
 
 # FIXME: 目前74被占用，224先不跑
 
-../test.sh insert run "224" MYHASH
-../test.sh read run "224" MYHASH,RACE
-../test.sh update run "224" MYHASH,RACE
-../test.sh update_zipf99 run "224" MYHASH,RACE
+# ../test.sh insert run "224" MYHASH
+# # ../test.sh read run "224" MYHASH,RACE
+# ../test.sh update run "224" MYHASH,RACE
+# ../test.sh update_zipf99 run "224" MYHASH,RACE
+
+# ../test.sh update run "32" RACE
 
 # 我想知道是不是一个MN超过112线程会0xc，然后彻底解决0xc
 # 每个CN 28，共112，0xc
