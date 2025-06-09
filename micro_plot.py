@@ -2,13 +2,18 @@ import os
 import re
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 
 hat = ['//', '\\\\', 'xx', '||', '--', '++']
 markers = ['H', '^', '>', 'D', 'o', 's', 'p', 'x']
-c = np.array([[102, 194, 165], [252, 141, 98], [141, 160, 203], 
-        [231, 138, 195], [166,216,84], [255, 217, 47],
-        [229, 196, 148], [179, 179, 179]])
-c  = c/255
+
+palette = sns.color_palette("Set2", n_colors=8)
+# c = np.array([[102, 194, 165], [252, 141, 98], [141, 160, 203], 
+#         [231, 138, 195], [166,216,84], [255, 217, 47],
+#         [229, 196, 148], [179, 179, 179]])
+# c  = c/255
+c = np.array(palette)
+print("Using color palette:", c)
 def hash_type_to_label(hash_type):
     if hash_type == 'MYHASH':
         return 'DREAM'
@@ -277,7 +282,14 @@ def calculate_relative_performance(data_sets):
                     # 如果有1线程的数据，额外输出
                     if single_thread_ratio is not None:
                         single_thread_comparison = "高于" if single_thread_ratio > 0 else "低于"
-                        print(f"，单线程时 {single_thread_ratio:.1f}% {single_thread_comparison}")
+                        print(f"，单线程时 {single_thread_ratio:.1f}% {single_thread_comparison}", end="")
+                    
+                    # 如果有224线程的数据，额外输出
+                    if 224 in common_threads:
+                        idx_224 = sorted(common_threads).index(224)
+                        ratio_224 = ratios[idx_224]
+                        comparison_224 = "高于" if ratio_224 > 0 else "低于"
+                        print(f"，224线程时 {ratio_224:.1f}% {comparison_224}")
                     else:
                         print()  # 换行
 
