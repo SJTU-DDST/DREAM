@@ -193,7 +193,7 @@ def plot_mixed(ax):
     # 设置图表属性
     ax.set_xlabel('Insert/Search Ratio')
     ax.set_ylabel('Throughput (Kops)')
-    ax.set_title('(a) Hybrid Workloads')
+    ax.set_title('Hybrid Workloads')
     ax.set_xticks(index)
     ax.set_xticklabels(data.keys(), rotation=0)
     

@@ -203,10 +203,10 @@ def plot_ycsb(ax, thread_str):
     ax.set_xticklabels(data.keys(), rotation=0)
     
     # 优化Y轴刻度显示
-    def thousands_formatter(x, pos):
-        return f'{int(x):,}'
+    # def thousands_formatter(x, pos):
+    #     return f'{int(x):,}'
     
-    ax.yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
+    # ax.yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
     
     # 添加网格线
     ax.grid(axis='y', linestyle='-.')

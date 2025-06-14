@@ -206,58 +206,79 @@ Client::~Client()
     sum_cost.print(cli_id,coro_id);
 }
 
-task<> Client::cal_utilization(){
-    if(this->machine_id !=0 || this->cli_id != 0 || this->coro_id != 0) co_return;
+task<> Client::cal_utilization()
+{
+    if (this->machine_id != 0 || this->cli_id != 0 || this->coro_id != 0)
+        co_return;
     co_await sync_dir();
-    uint64_t space_consumption = sizeof(uint64_t)+(1<<dir->global_depth)*sizeof(DirEntry);
-    uint64_t segment_cnt = 0 ;
-    uint64_t entry_total = 0 ;
-    uint64_t entry_cnt = 0 ;
-    uint64_t buc_meta_consumption = 0 ;
-    uint64_t dir_entry_consumption = sizeof(uint64_t)+(1<<dir->global_depth)*sizeof(DirEntry);
-    uint64_t total_meta_consumption = dir_entry_consumption ;
+    uint64_t space_consumption = sizeof(uint64_t) + (1 << dir->global_depth) * sizeof(DirEntry);
+    uint64_t segment_cnt = 0;
+    uint64_t entry_total = 0;
+    uint64_t entry_cnt = 0;
+    uint64_t buc_meta_consumption = 0;
+    uint64_t dir_entry_consumption = sizeof(uint64_t) + (1 << dir->global_depth) * sizeof(DirEntry);
+    uint64_t total_meta_consumption = dir_entry_consumption;
 
     // 遍历Segment，统计空间开销和空间利用率
-    log_err("global_dep:%lu",dir->global_depth);
-    log_err("sizeof(CurSeg):%lu sizeof(Slot):%lu",sizeof(CurSeg),sizeof(Slot));
-    CurSeg * cur_seg = (CurSeg*)alloc.alloc(sizeof(CurSeg));
-    for(uint64_t i = 0 ; i < (1<<dir->global_depth) ; i++){
-        uint64_t first_index = i & ((1<<dir->segs[i].local_depth)-1);
-        first_index |= 1<<dir->segs[i].local_depth ;
-        if(dir->segs[i].local_depth == dir->global_depth || i == first_index ){
+    log_err("global_dep:%lu", dir->global_depth);
+    log_err("sizeof(CurSeg):%lu sizeof(Slot):%lu", sizeof(CurSeg), sizeof(Slot));
+    CurSeg *cur_seg = (CurSeg *)alloc.alloc(sizeof(CurSeg));
+    for (uint64_t i = 0; i < (1 << dir->global_depth); i++)
+    {
+        uint64_t first_index = i & ((1 << dir->segs[i].local_depth) - 1);
+        first_index |= 1 << dir->segs[i].local_depth;
+        if (dir->segs[i].local_depth == dir->global_depth || i == first_index)
+        {
             // space_consumption += sizeof(CurSeg);
             // buc_meta_consumption += sizeof(CurSegMeta);
-            space_consumption += SEGMENT_SIZE+16*8+24;
-            buc_meta_consumption += 16*8+24;
+            space_consumption += SEGMENT_SIZE + 16 * 8 + 24;
+            buc_meta_consumption += 16 * 8 + 24;
+#if MODIFIED
+            space_consumption += sizeof(uint64_t); // segment memory node id & srq_num
+            buc_meta_consumption += sizeof(uint64_t);
+#endif
             entry_total += SLOT_PER_SEG;
             segment_cnt++;
-            
+
             // add main segment
-            co_await conn->read(dir->segs[i].cur_seg_ptr,seg_rmr.rkey,cur_seg,sizeof(CurSeg),lmr->lkey);
-            // space_consumption += cur_seg->seg_meta.main_seg_len * sizeof(Slot);
-            space_consumption += cur_seg->seg_meta.main_seg_len * 9;
+            co_await conn->read(dir->segs[i].cur_seg_ptr, seg_rmr.rkey, cur_seg, sizeof(CurSeg), lmr->lkey);
+            space_consumption += cur_seg->seg_meta.main_seg_len * sizeof(Slot);
+            // space_consumption += cur_seg->seg_meta.main_seg_len * 9;
             entry_total += cur_seg->seg_meta.main_seg_len;
             entry_cnt += cur_seg->seg_meta.main_seg_len;
 
             // cal cur segment
-            for(uint64_t i = 0 ; i < SLOT_PER_SEG ; i++){
-                if(cur_seg->slots[i].sign != cur_seg->seg_meta.sign ){
+#if MODIFIED
+            uint64_t slots_to_read = std::min<uint64_t>(cur_seg->seg_meta.slot_cnt, SLOT_PER_SEG);
+            for (uint64_t j = 0; j < slots_to_read; j++)
+            {
+                bool match_local_depth = cur_seg->slots[j].local_depth == cur_seg->seg_meta.local_depth;
+                if (match_local_depth)
+                {
                     entry_cnt++;
                 }
             }
+#else
+            for (uint64_t i = 0; i < SLOT_PER_SEG; i++)
+            {
+                if (cur_seg->slots[i].sign != cur_seg->seg_meta.sign)
+                {
+                    entry_cnt++;
+                }
+            }
+#endif
         }
     }
-    // double space_utilization = (1.0*entry_cnt*sizeof(Slot))/(1.0*space_consumption);
-    double space_utilization = (1.0*entry_cnt*9)/(1.0*space_consumption);
-    double entry_utilization = (1.0*entry_cnt)/(1.0*entry_total);
+    double space_utilization = (1.0 * entry_cnt * sizeof(Slot)) / (1.0 * space_consumption);
+    // double space_utilization = (1.0 * entry_cnt * 9) / (1.0 * space_consumption);
+    double entry_utilization = (1.0 * entry_cnt) / (1.0 * entry_total);
 
     total_meta_consumption += buc_meta_consumption;
     // space_consumption = space_consumption>>20;
 
     // log_err("space_consumption:%luMB segment_cnt:%lu entry_total:%lu entry_cnt:%lu entry_utilization:%lf space_utilization:%lf",space_consumption,segment_cnt,entry_total,entry_cnt,entry_utilization,space_utilization);
-    log_err("space_consumption:%lu buc_meta_consumption:%lu dir_entry_consumption:%lu total_meta_consumption:%lu segment_cnt:%lu entry_total:%lu entry_cnt:%lu entry_utilization:%lf space_utilization:%lf",space_consumption,buc_meta_consumption, dir_entry_consumption, total_meta_consumption,segment_cnt,entry_total,entry_cnt,entry_utilization,space_utilization);
+    log_err("space_consumption:%lu buc_meta_consumption:%lu dir_entry_consumption:%lu total_meta_consumption:%lu segment_cnt:%lu entry_total:%lu entry_cnt:%lu entry_utilization:%lf space_utilization:%lf", space_consumption, buc_meta_consumption, dir_entry_consumption, total_meta_consumption, segment_cnt, entry_total, entry_cnt, entry_utilization, space_utilization);
 }
-
 
 task<> Client::reset_remote()
 {
@@ -424,7 +445,7 @@ task<> Client::insert(Slice *key, Slice *value)
 Retry:
     alloc.ReSet(sizeof(Directory)+kvblock_len);
 #if !MODIFIED
-    if(retry_cnt++ == 1000) {
+    if(retry_cnt++ == 10000000) {
         // log_err("[%lu:%lu:%lu]Fail to insert after %lu retries, last retry_reason: %d",cli_id,coro_id,this->key_num,retry_cnt, retry_reason);
         perf.push_insert();
         sum_cost.end_insert();
@@ -1093,13 +1114,13 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
                 // Update DirEntry
                 co_await conn->write(cur_seg_ptr, seg_rmr.rkey,&dir->segs[cur_seg_loc+offset], sizeof(DirEntry), lmr->lkey);
 
-                // if (local_depth == dir->global_depth){
+                if (local_depth == dir->global_depth){
                 //     // global
-                //     log_err("[%lu:%lu:%lu]Global SPlit At segloc:%lx depth:%lu to :%lu with new seg_ptr:%lx new_main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr,i & 1 ?new_main_ptr2:new_main_ptr1);
+                    log_err("[%lu:%lu:%lu]Global SPlit At segloc:%lx depth:%lu to :%lu with new seg_ptr:%lx new_main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr,i & 1 ?new_main_ptr2:new_main_ptr1);
                 // }else{
                 //     // local 
                 //     log_err("[%lu:%lu:%lu]Local SPlit At segloc:%lx depth:%lu to :%lu with new seg_ptr:%lx new main_seg_ptr:%lx", cli_id, coro_id, this->key_num, cur_seg_loc+offset, local_depth, local_depth + 1, i & 1 ? new_cur_ptr:seg_ptr, i & 1 ? new_main_ptr2:new_main_ptr1);
-                // }
+                }
             }
         }
         // Update Global Depth

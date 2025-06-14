@@ -138,7 +138,8 @@ namespace MYHASH
                 seg_meta[segloc].main_seg_len = my_seg_meta->main_seg_len; // IMPORTANT: 相比dir->segs[segloc]，seg_meta[segloc]多了srq_num和fp_bitmap
                 dir->segs[segloc].local_depth = my_seg_meta->local_depth;
                 dir->segs[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
-                // dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len; FIXME: 会卡住
+                // dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len; // FIXME: 加回来才是正确的，但是会导致0xc，如果并发深度改小不会0xc，可能需要对read等其他请求限制并发深度。
+                // TODO:这个加回来，同时并发深度也正常限制而非2，通过限制read等其他请求避免0xc
                 co_await Split(segloc, segptr, my_seg_meta);
             }
             send_cnt = 0;
@@ -208,7 +209,7 @@ namespace MYHASH
 #endif  
         FpInfo fp_info[MAX_FP_INFO] = {};
         cal_fpinfo(new_main_seg->slots, new_seg_len, fp_info); // SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len
-
+        
         log_merge("将segloc:%lu/%lu的%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", seg_loc, (1ull << global_depth) - 1, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len, new_seg_len);
         // 4. Split (为了减少协程嵌套层次的开销，这里就不抽象成单独的函数了)
         if (dir->segs[seg_loc].main_seg_len >= MAX_MAIN_SIZE && local_depth < MAX_DEPTH)

@@ -54,11 +54,11 @@ def hash_type_to_label(hash_type):
 
 def hash_type_to_label_breakdown(hash_type):
     if hash_type == 'MYHASH':
-        return '+Split'
+        return '+Split (DREAM)'
     elif hash_type == 'MYHASH-NoOpt':
         return '+CC&Compact'
     elif hash_type == 'SEPHASH':
-        return 'Base'
+        return 'Base (SepHash)'
     elif hash_type == 'RACE-Partitioned':
         return 'RACE-Partitioned'
     else:

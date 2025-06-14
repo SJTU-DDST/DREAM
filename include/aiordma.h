@@ -192,7 +192,7 @@ constexpr uint64_t MAX_DEPTH = 20;
 constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
 struct FpInfo
 {
-    uint8_t num; // 数量 TODO: 改成开始的条目位置，和结束的条目位置。
+    uint8_t num; // 数量 TODO: uint8_t可能溢出，改成uint16_t记录开始的条目位置，读取时同时读取该fp的开始和下一个fp的开始。
     operator uint64_t()
     {
         return *(uint64_t *)this;

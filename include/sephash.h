@@ -20,8 +20,9 @@
 
 namespace SEPHASH
 {
-constexpr uint64_t SEGMENT_SIZE = 1024;
-constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t)+sizeof(uint8_t)));
+constexpr uint64_t SEGMENT_SIZE_ORIGINAL = 1024;
+constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE_ORIGINAL) / (sizeof(uint64_t) + sizeof(uint8_t)));
+constexpr uint64_t SEGMENT_SIZE = SLOT_PER_SEG * sizeof(Slot); // 因为Slot嵌入了额外fp，SEGMENT_SIZE需要重新计算
 constexpr uint64_t SLOT_BATCH_SIZE = 8;
 constexpr uint64_t RETRY_LIMIT = (SLOT_PER_SEG/SLOT_BATCH_SIZE); // TODO : 后期试试改成其他较小的值
 #if LARGE_MAIN_SEG

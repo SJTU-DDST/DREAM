@@ -98,8 +98,8 @@ bar_width = 0.2
 handles = []
 labels = []
 
-def thousands_formatter(x, pos):
-    return f'{int(x):,}'
+# def thousands_formatter(x, pos):
+#     return f'{int(x):,}'
 
 # 16线程子图（左）
 for i, h in enumerate(hash_types):
@@ -116,7 +116,7 @@ axs[0].set_title('16 Threads')
 axs[0].set_xticks(index)
 axs[0].set_xticklabels(x_labels)
 axs[0].grid(axis='y', linestyle='-.')
-axs[0].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
+# axs[0].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
 
 # 32线程子图（右）
 for i, h in enumerate(hash_types):
@@ -126,7 +126,7 @@ axs[1].set_title('32 Threads')
 axs[1].set_xticks(index)
 axs[1].set_xticklabels(x_labels)
 axs[1].grid(axis='y', linestyle='-.')
-axs[1].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
+# axs[1].yaxis.set_major_formatter(FuncFormatter(thousands_formatter))
 
 # 共享图例，放到上方
 handles, labels = axs[0].get_legend_handles_labels()
