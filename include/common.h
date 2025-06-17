@@ -67,7 +67,7 @@ constexpr int DEDUPLICATE_INTERVAL = 4; // 对于zipf99，线程数少实际上�
 #define LOW_MIN_RTR_TIMER 1 // 低延迟模式
 #define CLOSE_SOCKET 0 // 使用后关闭socket，目前只在server关闭，使用XRC后已经不需要
 #define CORO_DEBUG 0 // 协程调试
-#define LARGE_MAIN_SEG 0 // 使用大的main_seg，相当于禁用分裂
+#define LARGE_MAIN_SEG 0 // 使用大的main_seg
 #define ALLOC_CORO_THREAD_SAFE 0
 // #define INTEGRATED_SLOT_CNT 1 // 将 local_depth 和 slot_cnt 合并到一个 uint64_t 类型的位域中。
 // #define ALLOW_KEY_OVERLAP // 允许不同thread/coroutine的key范围重叠。即使key范围不重叠，也可能映射到同一个CurSeg，导致CAS失败。

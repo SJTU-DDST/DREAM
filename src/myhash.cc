@@ -138,8 +138,9 @@ namespace MYHASH
                 seg_meta[segloc].main_seg_len = my_seg_meta->main_seg_len; // IMPORTANT: 相比dir->segs[segloc]，seg_meta[segloc]多了srq_num和fp_bitmap
                 dir->segs[segloc].local_depth = my_seg_meta->local_depth;
                 dir->segs[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
-                // dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len; // FIXME: 加回来才是正确的，但是会导致0xc，如果并发深度改小不会0xc，可能需要对read等其他请求限制并发深度。
-                // TODO:这个加回来，同时并发深度也正常限制而非2，通过限制read等其他请求避免0xc
+                #if LARGE_MAIN_SEG
+                dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len;
+                #endif
                 co_await Split(segloc, segptr, my_seg_meta);
             }
             send_cnt = 0;

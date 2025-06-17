@@ -26,7 +26,7 @@ constexpr uint64_t SEGMENT_SIZE = SLOT_PER_SEG * sizeof(Slot); // 因为Slot嵌�
 constexpr uint64_t SLOT_BATCH_SIZE = 8;
 constexpr uint64_t RETRY_LIMIT = (SLOT_PER_SEG/SLOT_BATCH_SIZE); // TODO : 后期试试改成其他较小的值
 #if LARGE_MAIN_SEG
-constexpr uint64_t MAX_MAIN_SIZE = 640000 * SLOT_PER_SEG; // IMPORTANT: 打开后相当于main seg不能分裂
+constexpr uint64_t MAX_MAIN_SIZE = 128 * SLOT_PER_SEG;
 #else
 constexpr uint64_t MAX_MAIN_SIZE = 64 * SLOT_PER_SEG;
 #endif
