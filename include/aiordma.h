@@ -274,7 +274,7 @@ extern const ibv_qp_cap zero_qp_cap;
 
 const int rdma_info_mr_size = 1 << 21;
 const int rdma_info_mr_probing = 256;
-const int rdma_max_rd_atomic = 8;
+const int rdma_max_rd_atomic = 16;     // 可以预防0xc，另外sudo systemctl restart openibd opensmd可能也可以
 const int rdma_default_cq_size = 1024; // 64;
 const char rdma_default_host[] = "127.0.0.1";
 const int rdma_default_port = 10001;
