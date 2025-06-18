@@ -138,7 +138,7 @@ namespace MYHASH
                 seg_meta[segloc].main_seg_len = my_seg_meta->main_seg_len; // IMPORTANT: 相比dir->segs[segloc]，seg_meta[segloc]多了srq_num和fp_bitmap
                 dir->segs[segloc].local_depth = my_seg_meta->local_depth;
                 dir->segs[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
-                #if LARGE_MAIN_SEG
+                #if TEST_SEG_SIZE
                 dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len;
                 #endif
                 co_await Split(segloc, segptr, my_seg_meta);
@@ -277,10 +277,10 @@ namespace MYHASH
 #if REUSE_MAIN_SEG
             uintptr_t new_main_ptr1 = dir->segs[seg_loc].main_seg_ptr;
             if (new_main_ptr1 == 0) {
-                new_main_ptr1 = ralloc.alloc(sizeof(MainSeg), true);
+                new_main_ptr1 = ralloc.alloc(MAX_MAIN_SEG_SIZE, true);
                 dir->segs[seg_loc].main_seg_ptr = new_main_ptr1;
             }
-            uintptr_t new_main_ptr2 = ralloc.alloc(sizeof(MainSeg), true);
+            uintptr_t new_main_ptr2 = ralloc.alloc(MAX_MAIN_SEG_SIZE, true);
 #else
             uintptr_t new_main_ptr1 = ralloc.alloc(sizeof(Slot) * off1);
             uintptr_t new_main_ptr2 = ralloc.alloc(sizeof(Slot) * off2);
@@ -410,15 +410,15 @@ namespace MYHASH
 #if REUSE_MAIN_SEG
         uintptr_t new_main_ptr = dir->segs[seg_loc].main_seg_ptr;
         if (new_main_ptr == 0) {
-            new_main_ptr = ralloc.alloc(sizeof(MainSeg), true); // 大小是2 * MAX_MAIN_SIZE，因为还需要额外存储SLOT_PER_SEG个Slot
+            new_main_ptr = ralloc.alloc(MAX_MAIN_SEG_SIZE, true); // 大小是2 * MAX_MAIN_SIZE，因为还需要额外存储SLOT_PER_SEG个Slot
             dir->segs[seg_loc].main_seg_ptr = new_main_ptr; // 更新dir中的main_seg_ptr
         }
 #else
         uintptr_t new_main_ptr = ralloc.alloc(new_seg_len * sizeof(Slot), true); // IMPORTANT: 在MN分配new main seg，注意 FIXME: ralloc没有free功能 // main_seg_size + sizeof(Slot) * SLOT_PER_SEG
 #endif
-        if (sizeof(Slot) * new_seg_len > sizeof(MainSeg)) {
-            log_err("[%lu:%lu:%lu]new_main_ptr:%lx, new_seg_len:%lu, offset:%lx, size:%lu > sizeof(MainSeg):%lu, reallocate...", cli_id, coro_id, this->key_num, new_main_ptr, new_seg_len, ralloc.offset(new_main_ptr), sizeof(Slot) * new_seg_len, sizeof(MainSeg));
-            assert_require(false); // 如果达到depth上限，MainSeg的大小可能超出sizeof(MainSeg)，可以在每次溢出时翻倍容量，目前简单退出
+        if (sizeof(Slot) * new_seg_len > MAX_MAIN_SEG_SIZE) {
+            log_err("[%lu:%lu:%lu]new_main_ptr:%lx, new_seg_len:%lu, offset:%lx, size:%lu > MAX_MAIN_SEG_SIZE:%lu, reallocate...", cli_id, coro_id, this->key_num, new_main_ptr, new_seg_len, ralloc.offset(new_main_ptr), sizeof(Slot) * new_seg_len, MAX_MAIN_SEG_SIZE);
+            assert_require(false); // 如果达到depth上限，MainSeg的大小可能超出MAX_MAIN_SEG_SIZE，可以在每次溢出时翻倍容量，目前简单退出
         }
         wo_wait_conn->pure_write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots, sizeof(Slot) * new_seg_len, lmr->lkey);
 

@@ -149,6 +149,90 @@ rdma_dev::rdma_dev(const char *dev_name, int _ib_port, int _gid_idx)
     }
     assert_require(0 == ibv_query_port(ib_ctx, ib_port, &port_attr));
 
+    // log_err("Device attributes:");
+    // log_err("  fw_ver: %s", device_attr.fw_ver);
+    // log_err("  node_guid: 0x%016llx", (unsigned long long)device_attr.node_guid);
+    // log_err("  sys_image_guid: 0x%016llx", (unsigned long long)device_attr.sys_image_guid);
+    // log_err("  max_mr_size: %llu", (unsigned long long)device_attr.max_mr_size);
+    // log_err("  page_size_cap: %llu", (unsigned long long)device_attr.page_size_cap);
+    // log_err("  vendor_id: 0x%06x", device_attr.vendor_id);
+    // log_err("  vendor_part_id: 0x%06x", device_attr.vendor_part_id);
+    // log_err("  hw_ver: 0x%x", device_attr.hw_ver);
+    // log_err("  max_qp: %d", device_attr.max_qp);
+    // log_err("  max_qp_wr: %d", device_attr.max_qp_wr);
+    // log_err("  device_cap_flags: 0x%x", device_attr.device_cap_flags);
+    // log_err("  max_sge: %d", device_attr.max_sge);
+    // log_err("  max_sge_rd: %d", device_attr.max_sge_rd);
+    // log_err("  max_cq: %d", device_attr.max_cq);
+    // log_err("  max_cqe: %d", device_attr.max_cqe);
+    // log_err("  max_mr: %d", device_attr.max_mr);
+    // log_err("  max_pd: %d", device_attr.max_pd);
+    // log_err("  max_qp_rd_atom: %d", device_attr.max_qp_rd_atom);
+    // log_err("  max_ee_rd_atom: %d", device_attr.max_ee_rd_atom);
+    // log_err("  max_res_rd_atom: %d", device_attr.max_res_rd_atom);
+    // log_err("  max_qp_init_rd_atom: %d", device_attr.max_qp_init_rd_atom);
+    // log_err("  max_ee_init_rd_atom: %d", device_attr.max_ee_init_rd_atom);
+    // log_err("  atomic_cap: %d", device_attr.atomic_cap);
+    // log_err("  max_ee: %d", device_attr.max_ee);
+    // log_err("  max_rdd: %d", device_attr.max_rdd);
+    // log_err("  max_mw: %d", device_attr.max_mw);
+    // log_err("  max_raw_ipv6_qp: %d", device_attr.max_raw_ipv6_qp);
+    // log_err("  max_raw_ethy_qp: %d", device_attr.max_raw_ethy_qp);
+    // log_err("  max_mcast_grp: %d", device_attr.max_mcast_grp);
+    // log_err("  max_mcast_qp_attach: %d", device_attr.max_mcast_qp_attach);
+    // log_err("  max_total_mcast_qp_attach: %d", device_attr.max_total_mcast_qp_attach);
+    // log_err("  max_ah: %d", device_attr.max_ah);
+    // log_err("  max_fmr: %d", device_attr.max_fmr);
+    // log_err("  max_map_per_fmr: %d", device_attr.max_map_per_fmr);
+    // log_err("  max_srq: %d", device_attr.max_srq);
+    // log_err("  max_srq_wr: %d", device_attr.max_srq_wr);
+    // log_err("  max_srq_sge: %d", device_attr.max_srq_sge);
+    // log_err("  max_pkeys: %u", device_attr.max_pkeys);
+    // log_err("  local_ca_ack_delay: %u", device_attr.local_ca_ack_delay);
+    // log_err("  phys_port_cnt: %u", device_attr.phys_port_cnt);
+
+    // rdma_dev: Device attributes:
+    //   fw_ver: 20.43.2026
+    //   node_guid: 0xc874870003f6ceb8
+    //   sys_image_guid: 0xc674870003f6ceb8
+    //   max_mr_size: 18446744073709551615
+    //   page_size_cap: 18446744073709547520
+    //   vendor_id: 0x0002c9
+    //   vendor_part_id: 0x00101b
+    //   hw_ver: 0x0
+    //   max_qp: 131072
+    //   max_qp_wr: 32768
+    //   device_cap_flags: 0x21361c36
+    //   max_sge: 30
+    //   max_sge_rd: 30
+    //   max_cq: 16777216
+    //   max_cqe: 4194303
+    //   max_mr: 16777216
+    //   max_pd: 8388608
+    //   max_qp_rd_atom: 16
+    //   max_ee_rd_atom: 0
+    //   max_res_rd_atom: 2097152
+    //   max_qp_init_rd_atom: 16 // 不要有太多同设备并发请求
+    //   max_ee_init_rd_atom: 0
+    //   atomic_cap: 1
+    //   max_ee: 0
+    //   max_rdd: 0
+    //   max_mw: 16777216
+    //   max_raw_ipv6_qp: 0
+    //   max_raw_ethy_qp: 0
+    //   max_mcast_grp: 2097152
+    //   max_mcast_qp_attach: 240
+    //   max_total_mcast_qp_attach: 503316480
+    //   max_ah: 2147483647
+    //   max_fmr: 0
+    //   max_map_per_fmr: 0
+    //   max_srq: 8388608
+    //   max_srq_wr: 32767 // 不要有太多outstanding SRQ RECV WRs
+    //   max_srq_sge: 31
+    //   max_pkeys: 128
+    //   local_ca_ack_delay: 16
+    //   phys_port_cnt: 1
+
     assert_require(pd = ibv_alloc_pd(ib_ctx));
 
     fd = open("/tmp/xrc_domain", O_RDONLY | O_CREAT, S_IRUSR | S_IRGRP);
@@ -737,9 +821,9 @@ void rdma_worker::worker_loop()
                         srqs.resize(segloc + 1, nullptr);
                     assert_require(!srqs[segloc])
 #if USE_XRC
-                    assert_require(srqs[segloc] = dev.create_srq_ex(rdma_default_cq_size));
+                    assert_require(srqs[segloc] = dev.create_srq_ex(SLOT_PER_SEG));
 #else
-                    assert_require(srqs[segloc] = dev.create_srq(rdma_default_cq_size));
+                    assert_require(srqs[segloc] = dev.create_srq(SLOT_PER_SEG));
 #endif
                     for (int i = 0; i < SLOT_PER_SEG; i++)
                     {

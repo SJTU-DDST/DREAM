@@ -45,7 +45,11 @@ struct ConnInfo
     uint64_t segloc;
 };
 
+#if TEST_SEG_SIZE
+constexpr uint64_t SEGMENT_SIZE = 256;
+#else
 constexpr uint64_t SEGMENT_SIZE = 1024;
+#endif
 constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(uint8_t)));
 
 struct Slot

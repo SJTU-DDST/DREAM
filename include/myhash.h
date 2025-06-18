@@ -12,7 +12,6 @@ enum
 namespace MYHASH
 {
     using namespace SEPHASH;  // 引入整个SEPHASH命名空间
-    using SEPHASH::SLOT_PER_SEG;
     class Client : public SEPHASH::Client
     {
     public:
