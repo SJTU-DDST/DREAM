@@ -514,7 +514,7 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
 #endif
 #if USE_XRC
             ibv_srq *srq;
-            assert_require(srq = dev.create_srq_ex(cq_size));
+            assert_require(srq = dev.create_srq_ex(SLOT_PER_SEG));
             srqs.emplace_back(srq);
 
             uint32_t srq_num;

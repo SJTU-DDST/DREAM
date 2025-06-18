@@ -549,7 +549,7 @@ int main(int argc, char *argv[])
 
         if (config.machine_id == 0)
         {
-            // rdma_clis[0]->run(((ClientType*)clis[0][0])->cal_utilization());
+            rdma_clis[0]->run(((ClientType*)clis[0][0])->cal_utilization());
         }
 
         for (auto gen : gens)

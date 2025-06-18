@@ -46,7 +46,7 @@ struct ConnInfo
 };
 
 #if TEST_SEG_SIZE
-constexpr uint64_t SEGMENT_SIZE = 256;
+constexpr uint64_t SEGMENT_SIZE = 1024;
 #else
 constexpr uint64_t SEGMENT_SIZE = 1024;
 #endif

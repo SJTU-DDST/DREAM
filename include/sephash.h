@@ -22,6 +22,7 @@
 // srq导致bug是因为outstanding RECV request太多，例如4096 srq✖️128 slots=524288未执行的RECV，导致网卡资源不够。解决方法是先注册第1～16个slots，快用完时再注册16～32…。rdma支持srq水位机制可以在快用完时自动提醒并注册。
 // 试一下如果CurSeg更小，能不能创建更多SRQ。【好像是的】【那就是SRQ*max_wr需要限制】。那我们可以用SRQ_limit一次只注册一点。或者服务端poll_cq时注册也可以。
 // 另外max_wr不能设置太大？即使没有注册那么多RECV
+// 之前容量填写的1024，已经改回来了
 namespace SEPHASH
 {
 constexpr uint64_t SEGMENT_SIZE = SLOT_PER_SEG * sizeof(Slot); // 因为Slot嵌入了额外fp，SEGMENT_SIZE需要重新计算
@@ -32,7 +33,7 @@ constexpr uint64_t MAX_MAIN_SIZE = 128*113; // 256 * SLOT_PER_SEG; // 增大CurS
 constexpr uint64_t INIT_DEPTH = 12; // 能否利用SRQ_limit一次注册16个，同时在服务端有变量维护已经注册了多少个
 
 constexpr uint64_t NUM_SEGS = 1 << INIT_DEPTH; // 大概depth=12性能最好，再往上提升不明显，
-constexpr uint64_t NUM_WRS = NUM_SEGS * SLOT_PER_SEG; // 上限大概十几万？
+constexpr uint64_t NUM_WRS = NUM_SEGS * SLOT_PER_SEG; // 上限大概四十几万？524288不行
 #else
 constexpr uint64_t MAX_MAIN_SIZE = 64 * SLOT_PER_SEG;
 constexpr uint64_t INIT_DEPTH = 8;
