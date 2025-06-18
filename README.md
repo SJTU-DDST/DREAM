@@ -1,11 +1,11 @@
-# SepHash: A Write-Optimized Hash Index On Disaggregated Memory via Separate Segment Structure
+# DREAM
 
-SepHash is a write-optimized hash index designed for emerging disaggregated memory. SepHash uses several techniques to optimize write operations and index expansion on disaggregated memory while maintaining balanced read performance. SepHash proposes a two-level separate segment structure that significantly reduces the bandwidth consumption during resizing. SepHash reduces latency on each write operation using append writes and coroutine. With optimized filter and cache structures, SepHash maintains good read performance.
+DREAM is a high-performance hash index on disaggregated memory that minimizes network overhead during writes. This repository is forked from [SepHash](https://github.com/minxinhao/SepHash).
 
 ## Feature Highlights
 
-- Write performance much higher than RACE under write intensive load, 3.3x for write only workload.
-- Read performance close to RCE, much better than other leveling hash indexes ported to disaggregated memory.
+- High write performance under inserts and uniform and skewed updates.
+- Read performance comparable to RACE, much better than other leveling hash indexes ported to disaggregated memory.
 - High space utilization with very low metadata overhead.
 - Good scalability with number of clients and servers.
 
@@ -19,14 +19,15 @@ SepHash is a write-optimized hash index designed for emerging disaggregated memo
 
 ### Prepare and build dependencies
 
-- g++-11
-- C++20
+- g++-14
+- C++23
 - MLNX_OFED higher than 5.0
 - pip install fabric
 
 ### Build
 
 - Configuring server/ip information:
+    - Change the SepHash path in all bash scripts (/home/congyong/SepHash) to your own directory.
     - Edit the list of client-nodes in run.py and sync.sh.
     - set server's ip in ser_cli.sh.
 - Generate executable and copy to all client nodes.
@@ -35,8 +36,16 @@ SepHash is a write-optimized hash index designed for emerging disaggregated memo
 $ mkdir build 
 $ cd build
 $ cmake ..
-$ make ser_cli
+$ make -j112
 $ ../sync.sh out #client-nodes
+```
+
+- one-key test (MYHASH is DREAM)
+
+```bash
+$ cd build
+$ ../test.sh insert run "1,4,8,16,32,56,112,168,224" "MYHASH,SEPHASH"
+$ grep -r "Run IOPS" ./data_insert/
 ```
 
 - run servers
