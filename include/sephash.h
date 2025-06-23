@@ -17,7 +17,7 @@
 
 // #define TOO_LARGE_KV
 
-// 我们目前创建很多SRQ，每个SRQ用RECV批量注册max_wr个接收缓冲区，SEND完全消耗完后客户端会RDMA READ这些缓冲区中的数据处理，处理完后提醒服务端再重新注册max_wr个。目前发现SRQ数量*max_wr超过一定阈值就会出现IBV_WC_RETRY_EXC_ERR。因此要增加SRQ数量得减少max_wr，但max_wr小了客户端处理&提醒服务端会很频繁。有什么解决方法？
+// FIXME: 我们目前创建很多SRQ，每个SRQ用RECV批量注册max_wr个接收缓冲区，SEND完全消耗完后客户端会RDMA READ这些缓冲区中的数据处理，处理完后提醒服务端再重新注册max_wr个。目前发现SRQ数量*max_wr超过一定阈值就会出现IBV_WC_RETRY_EXC_ERR。因此要增加SRQ数量得减少max_wr，但max_wr小了客户端处理&提醒服务端会很频繁。有什么解决方法？
 // 能否减少max_wr，但服务端不一次性注册所有缓冲区，而是先注册前max_wr个缓冲区。消耗完后（可以是客户端提醒，可以是服务端poll_cq计数感知到，可以是srq水位感知到），服务端再注册接下来的max_wr个……最后全部缓冲区写满后客户端才READ并处理数据，然后提醒服务端从头开始。
 // srq导致bug是因为outstanding RECV request太多，例如4096 srq✖️128 slots=524288未执行的RECV，导致网卡资源不够。解决方法是先注册第1～16个slots，快用完时再注册16～32…。rdma支持srq水位机制可以在快用完时自动提醒并注册。
 // 试一下如果CurSeg更小，能不能创建更多SRQ。【好像是的】【那就是SRQ*max_wr需要限制】。那我们可以用SRQ_limit一次只注册一点。或者服务端poll_cq时注册也可以。
@@ -30,7 +30,8 @@ constexpr uint64_t SLOT_BATCH_SIZE = 8;
 constexpr uint64_t RETRY_LIMIT = (SLOT_PER_SEG/SLOT_BATCH_SIZE); // TODO : 后期试试改成其他较小的值
 #if TEST_SEG_SIZE
 constexpr uint64_t MAX_MAIN_SIZE = 128*113; // 256 * SLOT_PER_SEG; // 增大CurSeg，暂时避免分裂
-constexpr uint64_t INIT_DEPTH = 12; // 能否利用SRQ_limit一次注册16个，同时在服务端有变量维护已经注册了多少个
+constexpr uint64_t INIT_DEPTH = 10; // 越大性能越好，因为写入不容易碰到合并，但占用更多网卡资源
+// TODO: 能否利用SRQ_limit一次注册16个，同时在服务端有变量维护已经注册了多少个
 
 constexpr uint64_t NUM_SEGS = 1 << INIT_DEPTH; // 大概depth=12性能最好，再往上提升不明显，
 constexpr uint64_t NUM_WRS = NUM_SEGS * SLOT_PER_SEG; // 上限大概四十几万？524288不行

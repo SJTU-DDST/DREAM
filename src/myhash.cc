@@ -3,6 +3,9 @@
 
 namespace MYHASH
 {
+#if SPLIT_LOCAL_LOCK
+    std::vector<std::shared_mutex> Client::segloc_locks(DIR_SIZE);
+#endif
     task<> Client::insert(Slice *key, Slice *value)
     {
         perf.start_perf();
@@ -85,9 +88,22 @@ namespace MYHASH
         }
         assert_require(seg_meta[segloc].srq_num > 0);
         {
+#if SPLIT_LOCAL_LOCK
+            std::shared_lock<std::shared_mutex> lock(segloc_locks[segloc]); // 上锁，避免线程写入一个正在合并的段
+#endif
             xrc_conn->dev.send_semaphore.acquire(); // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR
-            // FIXME: 目前只限制了SEND的，其他READ/WRITE等请求没有限制，后续可以在do_send处获取信号量并在poll_cq处释放，保证不出错
+            // 目前只限制了SEND的，其他READ/WRITE等请求没有限制，后续可以在do_send处获取信号量并在poll_cq处释放，保证不出错
             auto send_slot = xrc_conn->send(tmp, sizeof(Slot), lmr->lkey, seg_meta[segloc].srq_num);
+#if SPLIT_LOCAL_LOCK
+            lock.unlock(); // 解锁
+#endif            
+            // TODO: 如果send等待超过20us则上独占锁，因为其他CN可能正在合并这个段
+            // std::this_thread::sleep_for(std::chrono::microseconds(20));
+            // if (!send_slot.await_ready()) {
+            //     // std::unique_lock<std::shared_mutex> lock(segloc_locks[segloc]); // 上锁，避免更多线程写入一个正在合并的段
+            //     co_await std::move(send_slot);
+            //     // 解锁
+            // } else       
             co_await std::move(send_slot);
             xrc_conn->dev.send_semaphore.release();
         }
@@ -131,6 +147,10 @@ namespace MYHASH
         if (seg_meta[segloc].slot_cnt == 0)
         {
             {
+#if SPLIT_LOCAL_LOCK
+                std::unique_lock<std::shared_mutex> write_lock(segloc_locks[segloc], std::try_to_lock);
+                bool locked = write_lock.owns_lock();
+#endif
                 CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
                 co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, 3 * sizeof(uint64_t), lmr->lkey); // don't read bitmap
                 seg_meta[segloc].local_depth = my_seg_meta->local_depth; // 顺便同步元数据，但因为seg_meta不是用alloc.alloc分配的，不能直接读过去
@@ -142,6 +162,10 @@ namespace MYHASH
                 dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len;
                 #endif
                 co_await Split(segloc, segptr, my_seg_meta);
+#if SPLIT_LOCAL_LOCK
+                if (locked)
+                    write_lock.unlock();
+#endif
             }
             send_cnt = 0;
             if (remote_split) goto Retry;
