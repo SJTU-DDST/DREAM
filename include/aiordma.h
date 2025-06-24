@@ -140,6 +140,12 @@ using FpBitmapType = uint64_t;
 
 constexpr uint64_t LOCAL_DEPTH_BITS = 55;
 constexpr uint64_t SIGN_AND_SLOT_CNT_BITS = 64 - LOCAL_DEPTH_BITS;
+struct FetchMeta
+{
+    uint64_t sign : 1;
+    uint64_t slot_cnt : 8;
+    uint64_t local_depth : LOCAL_DEPTH_BITS;
+};
 struct CurSegMeta
 {
     uint8_t sign : 1; // 实际中的split_lock可以和sign、depth合并，这里为了不降rdma驱动版本就没有合并。

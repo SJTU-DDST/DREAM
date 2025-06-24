@@ -28,7 +28,7 @@
 #define HASH_TYPE MYHASH
 #define MODIFIED 1
 #if MODIFIED
-// Modified
+// DREAM
 #define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
 #define USE_XRC 1 // 使用XRC
 #define SPLIT_LOCAL_LOCK 1 // 合并/分裂时在本地上锁，参考Sherman
@@ -36,25 +36,8 @@
 #define DISABLE_OPTIMISTIC_SPLIT 0 // 禁用客户端的乐观分裂检测，用于性能分解实验
 #define EMBED_FULL_KEY 1 // 在CurSeg中嵌入完整key，避免合并时需要读取完整key。即使Slot大于8B，也可以通过单次SEND发送，且因为FAA slot_cnt不会读取/合并不完整的条目。
 
-// #define SEND_MULTI_SEG 1 // 启用多个TempSeg，用于测试多个TempSeg的性能。
-// 1. 允许client在满时分裂 OK
-// 2. client分裂后发出write with imm通知server OK
-// 3. server接收到write with imm后为新分裂出的segment创建SRQ，将SRQ信息记录在CurSegMeta OK
-// 4. INTEGRATED_SLOT_CNT；将slot_cnt嵌入local_depth，这样FAA slot_cnt后可以同时得到local_depth，判断远端是否分裂 OK
-// 5. 判断远端分裂后check_gd，重试写入 OK
-// 6. client判断远端分裂后，刚才的写入需要无效化，在Slot中添加8bit的发送方local_depth，如果不一致，合并时丢弃该条目 OK
-// 7. 允许用0以外的segloc，如果发现本地的CurSegMeta没有对应的条目，创建新QP以连接新的SRQ OK
-#else
-// SepHash
-// #define TEST_SEND 0
-// #define SEND_TO_CURSEG 0
-// #define REMOVE_CAS 0 // 后续去掉
-// SepHash fixes
-// 更新/删除转换为插入
-// 合并时fp相同检查完整key
-// 查询时检查fp确认是否读取CurSeg
-// 1 bit sign不一致，合并后需要清空CurSeg
-// FP bitmap不一致，改为8bit粒度
+// TicketHash
+#define USE_TICKET_HASH 0 // 使用TicketHash
 #endif
 
 constexpr int MAX_SEND_CONCURRENCY = 8; // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR

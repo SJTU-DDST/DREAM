@@ -49,8 +49,7 @@ namespace MYHASH
         // }
 #endif
 
-        // 4. write slot
-        // a. Init Slot
+        // Init Slot
         uint64_t dep = dir->segs[segloc].local_depth - (dir->segs[segloc].local_depth % 4);
         tmp->dep = pattern >> dep;
         tmp->len = (kvblock_len + ALIGNED_SIZE - 1) / ALIGNED_SIZE;
@@ -65,7 +64,7 @@ namespace MYHASH
 #endif
         tmp->local_depth = dir->segs[segloc].local_depth; // 本地的local_depth，用于合并时去除过时条目
 
-        // a2. send slot
+        // RTT1. send slot
         static int send_cnt = 0;
         if (seg_meta.find(segloc) == seg_meta.end())
         {
@@ -125,22 +124,14 @@ namespace MYHASH
 #endif
         co_await std::move(faa_slot_cnt);
 
-        auto remote_sign = fetch & 1;
-        auto remote_slot_cnt = (fetch & ((1 << SIGN_AND_SLOT_CNT_BITS) - 1)) >> 1;
-        auto remote_local_depth = fetch >> SIGN_AND_SLOT_CNT_BITS;
-        seg_meta[segloc].sign = remote_sign;
-        seg_meta[segloc].slot_cnt = remote_slot_cnt; // TODO: 不使用fetch，直接返回到slot_cnt
-        seg_meta[segloc].slot_cnt++;
-        if (seg_meta[segloc].slot_cnt >= SLOT_PER_SEG) {
-            log_test("[%lu:%lu]FAA segloc:%lu的meta地址%llx成功 remote_slot_cnt:%lu remote_local_depth:%lu",
-                    cli_id, coro_id, segloc, segptr + sizeof(uint64_t), remote_slot_cnt, remote_local_depth);
-        }
-        seg_meta[segloc].slot_cnt %= SLOT_PER_SEG;
+        FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
+        seg_meta[segloc].sign = meta.sign;
+        seg_meta[segloc].slot_cnt = (meta.slot_cnt + 1) % SLOT_PER_SEG;
 
-        bool remote_split = remote_local_depth > dir->segs[segloc].local_depth;
+        bool remote_split = meta.local_depth > dir->segs[segloc].local_depth;
         if (remote_split)
         { // 应该大于本地的local_depth就需要更新
-            // tmp->print(std::format("[{}:{}:{}]远端分裂了！remote_local_depth:{}>local_depth:{}，本次写入作废！需要重写！segloc:{}，FAA地址:{}", cli_id, coro_id, this->key_num, remote_local_depth, dir->segs[segloc].local_depth, segloc, segptr + sizeof(uint64_t)));
+            // tmp->print(std::format("[{}:{}:{}]远端分裂了！remote_local_depth:{}>local_depth:{}，本次写入作废！需要重写！segloc:{}，FAA地址:{}", cli_id, coro_id, this->key_num, meta.local_depth, dir->segs[segloc].local_depth, segloc, segptr + sizeof(uint64_t)));
             co_await check_gd(segloc, false, true);
         }
         // check if need split
