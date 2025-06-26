@@ -29,16 +29,21 @@
 #define MODIFIED 1
 #if MODIFIED
 // DREAM
-#define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
-#define USE_XRC 1 // 使用XRC
 #define SPLIT_LOCAL_LOCK 1 // 合并/分裂时在本地上锁，参考Sherman
 #define REUSE_MAIN_SEG 1 // 允许reuse main_seg，分裂时不创建新的main_seg
 #define DISABLE_OPTIMISTIC_SPLIT 0 // 禁用客户端的乐观分裂检测，用于性能分解实验
 #define EMBED_FULL_KEY 1 // 在CurSeg中嵌入完整key，避免合并时需要读取完整key。即使Slot大于8B，也可以通过单次SEND发送，且因为FAA slot_cnt不会读取/合并不完整的条目。
 
 // TicketHash
-#define USE_TICKET_HASH 1 // 使用TicketHash
-// TODO: 去掉SRQ相关代码
+#define USE_TICKET_HASH 0 // 使用TicketHash TODO: 实现分裂功能
+// 目前吞吐量2274.55Kops比SEND的3326.04Kops低，可能受限于两次FAA、等待合并完成的READ对带宽的消耗
+#if USE_TICKET_HASH
+#define RDMA_SIGNAL 0
+#define USE_XRC 0
+#else
+#define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
+#define USE_XRC 1     // 使用XRC
+#endif
 #endif
 
 constexpr int MAX_SEND_CONCURRENCY = 8; // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR

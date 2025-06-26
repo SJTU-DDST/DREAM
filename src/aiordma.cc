@@ -502,6 +502,7 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
         // log_err("创建CQ: %p, cq_size: %d", cq, cq_size); // server: 1024, client: 64
     }
     // else log_err("cq: %p已经存在，不需要创建", cq);
+#if !USE_TICKET_HASH
     if (qp_cap.max_recv_wr) {
         struct ibv_sge sge;
         struct ibv_recv_wr wr;
@@ -548,6 +549,7 @@ rdma_worker::rdma_worker(rdma_dev &_dev, const ibv_qp_cap &_qp_cap,
         log_test("是server，创建srqs[0..15]和signal_srq: %p, cq_size: %d，并为signal_srq发布%d个RECV", signal_srq, cq_size, SLOT_PER_SEG);
         srq_cv.notify_all();
     } // else log_err("是client，不创建SRQ");
+#endif
     if (qp_cap.max_recv_wr > 0)
         assert_require(pending_tasks = new task_ring());
     assert_require(yield_handler = new handle_ring(max_coros));
@@ -1243,6 +1245,7 @@ rdma_conn::rdma_conn(rdma_worker *w, int _sock, ConnInfo conn_info)
                     qp_init_attr.srq = worker->signal_srq;
                 else
 #endif
+#if !USE_TICKET_HASH
                 {
                     if (conn_info.segloc >= worker->srqs.size() || !worker->srqs[conn_info.segloc])
                     {
@@ -1255,6 +1258,7 @@ rdma_conn::rdma_conn(rdma_worker *w, int _sock, ConnInfo conn_info)
                     }
                     qp_init_attr.srq = worker->srqs[conn_info.segloc];
                 }
+#endif
             }
 #endif
             qp_init_attr.cap = worker->qp_cap;
