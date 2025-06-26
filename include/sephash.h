@@ -343,7 +343,7 @@ class Client : public BasicDB
                         // 还是随机read吧，使用一个固定的序列？保存在本地，免得需要修改远端的。
     Directory *dir;
 #if LARGER_FP_FILTER_GRANULARITY
-    std::unordered_map<size_t, CurSegMeta> seg_meta; // 本地缓存CurSegMeta, TODO: 换成指针并用alloc.alloc分配
+    std::unordered_map<size_t, CurSegMeta> seg_meta; // 本地缓存CurSegMeta, TODO: 换成指针并用alloc.alloc分配 TODO: 改成整个CN共享
 #endif
 };
 

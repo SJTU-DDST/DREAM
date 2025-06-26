@@ -63,15 +63,55 @@ namespace MYHASH
         tmp->fp_2 = fp2(pattern);
 #endif
         tmp->local_depth = dir->segs[segloc].local_depth; // 本地的local_depth，用于合并时去除过时条目
-
-        // RTT1. send slot
-        static int send_cnt = 0;
         if (seg_meta.find(segloc) == seg_meta.end())
         {
             seg_meta[segloc] = CurSegMeta();
             memset(&seg_meta[segloc], 0, sizeof(CurSegMeta));
         }
-        uint32_t *srq_num_ptr = nullptr;
+
+        uint64_t fetch = 0;
+        FetchMeta meta;
+        bool remote_split = false;
+#if USE_TICKET_HASH
+        // RTT1. FAA slot_ticket
+        {
+#if SPLIT_LOCAL_LOCK
+            std::shared_lock<std::shared_mutex> read_lock(segloc_locks[segloc]);
+#endif
+            co_await conn->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, SLOT_TICKET_INC);
+            // print_fetch_meta(fetch, std::format("增加segloc:{}的slot_ticket，释放锁", segloc), SLOT_TICKET_INC);
+        }
+        meta = *reinterpret_cast<FetchMeta *>(&fetch);
+        seg_meta[segloc].sign = meta.sign;
+        remote_split = meta.local_depth > dir->segs[segloc].local_depth;
+        if (remote_split)
+            co_await check_gd(segloc, false, true);
+        // bool is_write_buffer_1 = true; // (meta.slot_ticket < (SLOT_PER_SEG / 2)); 先只用一个buffer
+        int target_merge_cnt = (meta.slot_ticket / SLOT_PER_SEG) % CLEAR_MERGE_CNT_PERIOD;
+        // TODO: 分裂的代码改一下。
+        if (meta.merge_cnt % CLEAR_MERGE_CNT_PERIOD != target_merge_cnt)
+        {
+#if SPLIT_LOCAL_LOCK
+            std::unique_lock<std::shared_mutex> write_lock(segloc_locks[segloc], std::try_to_lock);
+#endif
+            FetchMeta *my_fetch_meta = (FetchMeta *)alloc.alloc(sizeof(FetchMeta));
+            while (meta.merge_cnt % CLEAR_MERGE_CNT_PERIOD != target_merge_cnt)
+            {
+                co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_fetch_meta, sizeof(FetchMeta), lmr->lkey);
+                meta.merge_cnt = my_fetch_meta->merge_cnt;
+                usleep(10);
+            }
+            seg_meta[segloc].sign = my_fetch_meta->sign;
+            remote_split = my_fetch_meta->local_depth > dir->segs[segloc].local_depth;
+            if (remote_split)
+            {
+                co_await check_gd(segloc, false, true);
+            }
+        }
+        // TODO: 如果是远端分裂了，可能需要重试
+#else
+            // RTT1. send slot
+            uint32_t *srq_num_ptr = nullptr;
         while (!seg_meta[segloc].srq_num)
         {
             if (!srq_num_ptr) srq_num_ptr = (uint32_t *)alloc.alloc(sizeof(uint32_t));
@@ -106,11 +146,9 @@ namespace MYHASH
             co_await std::move(send_slot);
             xrc_conn->dev.send_semaphore.release();
         }
-        // a3. fetch and add slot_cnt
-        uint64_t fetch = 0;
-        auto faa_slot_cnt = conn->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, 1ULL << 1);
+#endif
 
-        // b. write fp bitmap 同时进行write fp和faa slot_cnt，可能导致因为远端分裂而无效的写入被读到，但读取时会读CurSegment元数据，可以检查depth是否匹配而排除
+        // RTT2. write fp bitmap
 #if LARGER_FP_FILTER_GRANULARITY
 #if EMBED_FULL_KEY
         auto bit_loc = get_fp_bit(fp(pattern), fp2(pattern));
@@ -120,17 +158,25 @@ namespace MYHASH
         seg_meta[segloc].fp_bitmap[bit_loc] = 1;
         CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
         my_seg_meta->fp_bitmap[bit_loc] = 1;
-        co_await conn->write(segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType), seg_rmr.rkey, my_seg_meta->fp_bitmap + bit_loc, sizeof(FpBitmapType), lmr->lkey);
+        auto write_fp_bitmap = conn->write(segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType), seg_rmr.rkey, my_seg_meta->fp_bitmap + bit_loc, sizeof(FpBitmapType), lmr->lkey);
 #endif
-        co_await std::move(faa_slot_cnt);
+        // RTT2. FAA slot_cnt
+        auto faa_slot_cnt = conn->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, SLOT_CNT_INC);
 
-        FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
+#if USE_TICKET_HASH
+        // RTT2. write slot
+        co_await conn->write(segptr + sizeof(uint64_t) + sizeof(CurSegMeta) + (meta.slot_ticket % SLOT_PER_SEG) * sizeof(Slot), seg_rmr.rkey, tmp, sizeof(Slot), lmr->lkey); // TODO: can delay
+#endif
+        co_await std::move(write_fp_bitmap); // TODO: can delay
+        co_await std::move(faa_slot_cnt); 
+        // print_fetch_meta(fetch, std::format("增加segloc:{}的slot_cnt", segloc), SLOT_CNT_INC);
+        meta = *reinterpret_cast<FetchMeta *>(&fetch);
         seg_meta[segloc].sign = meta.sign;
         seg_meta[segloc].slot_cnt = (meta.slot_cnt + 1) % SLOT_PER_SEG;
 
-        bool remote_split = meta.local_depth > dir->segs[segloc].local_depth;
+        remote_split = meta.local_depth > dir->segs[segloc].local_depth;
         if (remote_split)
-        { // 应该大于本地的local_depth就需要更新
+        {
             // tmp->print(std::format("[{}:{}:{}]远端分裂了！remote_local_depth:{}>local_depth:{}，本次写入作废！需要重写！segloc:{}，FAA地址:{}", cli_id, coro_id, this->key_num, meta.local_depth, dir->segs[segloc].local_depth, segloc, segptr + sizeof(uint64_t)));
             co_await check_gd(segloc, false, true);
         }
@@ -140,7 +186,6 @@ namespace MYHASH
             {
 #if SPLIT_LOCAL_LOCK
                 std::unique_lock<std::shared_mutex> write_lock(segloc_locks[segloc], std::try_to_lock);
-                bool locked = write_lock.owns_lock();
 #endif
                 CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
                 co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, 3 * sizeof(uint64_t), lmr->lkey); // don't read bitmap
@@ -153,12 +198,7 @@ namespace MYHASH
                 dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len;
                 #endif
                 co_await Split(segloc, segptr, my_seg_meta);
-#if SPLIT_LOCAL_LOCK
-                if (locked)
-                    write_lock.unlock();
-#endif
             }
-            send_cnt = 0;
             if (remote_split) goto Retry;
             perf.push_insert();
             sum_cost.end_insert();
@@ -475,6 +515,25 @@ namespace MYHASH
         }
 
         // 5.3 Change Sign (Equal to unlock this segment)
+#if USE_TICKET_HASH
+        uint64_t fetch = 0;
+        co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, 0);
+        FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
+        if (meta.merge_cnt + 1 == CLEAR_MERGE_CNT_PERIOD)
+        {
+            // 如果cur_seg->seg_meta.merge_cnt在本次FAA后会上升到128，则改为将merge_cnt减少127，同时将slot_ticket减少128*SLOT_PER_SEG（SLOT_CNT_INC还是和原来一样减少SLOT_PER_SEG）
+            // merge_cnt减少CLEAR_MERGE_CNT_PERIOD-1，slot_ticket减少CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG，清零slot_cnt
+            uint64_t addval = -(int64_t)(CLEAR_MERGE_CNT_PERIOD - 1) * MERGE_CNT_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG) * SLOT_TICKET_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC;
+            co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, addval);
+            // print_fetch_meta(fetch, std::format("清零segloc:{}的merge_cnt，减少slot_ticket，并清零slot_cnt", seg_loc), addval);
+        }
+        else
+        {
+            co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
+            // print_fetch_meta(fetch, std::format("增加segloc:{}的merge_cnt并清零slot_cnt", seg_loc), MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
+        }
+       
+#else
         cur_seg->seg_meta.sign = !cur_seg->seg_meta.sign;
         cur_seg->seg_meta.slot_cnt = 0;
 #if MODIFIED
@@ -483,6 +542,7 @@ namespace MYHASH
         log_merge("合并后提醒为segloc:%lu旧Segment发布RECV完成，main_seg_ptr:%lx,main_seg_len:%lu", seg_loc, new_main_ptr, new_seg_len);
 #else
         co_await wo_wait_conn->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(uint64_t), lmr->lkey);
+#endif
 #endif
         sum_cost.end_merge();
     }

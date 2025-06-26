@@ -37,7 +37,8 @@
 #define EMBED_FULL_KEY 1 // 在CurSeg中嵌入完整key，避免合并时需要读取完整key。即使Slot大于8B，也可以通过单次SEND发送，且因为FAA slot_cnt不会读取/合并不完整的条目。
 
 // TicketHash
-#define USE_TICKET_HASH 0 // 使用TicketHash
+#define USE_TICKET_HASH 1 // 使用TicketHash
+// TODO: 去掉SRQ相关代码
 #endif
 
 constexpr int MAX_SEND_CONCURRENCY = 8; // 每个RNIC设备的outstanding request数量有限，超出会导致IBV_WC_RETRY_EXC_ERR

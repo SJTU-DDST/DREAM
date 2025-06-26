@@ -102,6 +102,8 @@
     "cfenv": "cpp",
     "complex": "cpp",
     "typeindex": "cpp",
-    "stdfloat": "cpp"
+    "stdfloat": "cpp",
+    "strstream": "cpp",
+    "codecvt": "cpp"
   }
 }

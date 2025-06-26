@@ -8,6 +8,7 @@
 #include <functional>
 #include <infiniband/verbs.h>
 #include <fcntl.h>
+#include <source_location>
 
 #include "common.h"
 
@@ -50,8 +51,12 @@ constexpr uint64_t SEGMENT_SIZE = 1024;
 #else
 constexpr uint64_t SEGMENT_SIZE = 1024;
 #endif
-constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(uint8_t)));
 
+#if USE_TICKET_HASH
+constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t)));
+#else
+constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(uint8_t)));
+#endif
 struct Slot
 {
 #if EMBED_FULL_KEY
@@ -138,14 +143,59 @@ constexpr size_t FP_BITMAP_LENGTH = 16;
 using FpBitmapType = uint64_t;
 #endif
 
+#if USE_TICKET_HASH
+constexpr uint64_t CLEAR_MERGE_CNT_PERIOD = 128;
+constexpr uint64_t MERGE_TICKET_SHIFT = 1 * 2 + 8;
+constexpr uint64_t MERGE_TICKET_INC = (1ULL << MERGE_TICKET_SHIFT);
+constexpr uint64_t MERGE_CNT_SHIFT = MERGE_TICKET_SHIFT + 8; // 8 bits for merge_ticket
+constexpr uint64_t MERGE_CNT_INC = (1ULL << MERGE_CNT_SHIFT);
+constexpr uint64_t SLOT_TICKET_SHIFT = MERGE_CNT_SHIFT + 8; // 8 bits for merge_cnt
+constexpr uint64_t SLOT_TICKET_INC = (1ULL << SLOT_TICKET_SHIFT);
+constexpr uint64_t SLOT_CNT_SHIFT = SLOT_TICKET_SHIFT + 22; // 22 bits for slot_ticket
+constexpr uint64_t SLOT_CNT_INC = (1ULL << SLOT_CNT_SHIFT);
+constexpr uint64_t SLOT_CNT_2_SHIFT = SLOT_CNT_SHIFT + 8; // 8 bits for slot_cnt
+constexpr uint64_t SLOT_CNT_2_INC = (1ULL << SLOT_CNT_2_SHIFT);
+struct FetchMeta { // IMPORTANT: 可能只能用FAA/CAS来更新，否则可能影响其他客户端获得的slot_ticket
+    uint8_t split_flag : 1; // 下次合并时是否分裂
+    uint8_t sign : 1;       // 下次合并WriteBuffer1/2
+    uint64_t local_depth : 8;
+    uint64_t merge_ticket : 8; // 好像不需要，有cnt就行，但有双缓冲区后可能需要
+    uint64_t merge_cnt : 8;
+    uint64_t slot_ticket : 22; // slot_ticket用掉剩余全部位
+    uint64_t slot_cnt : 8;
+    uint64_t slot_cnt_2 : 8;
+} __attribute__((aligned(1)));
+struct CurSegMeta
+{
+    uint8_t split_flag : 1; // 下次合并时是否分裂
+    uint8_t sign : 1;       // 下次合并WriteBuffer1/2
+    uint64_t local_depth : 8;
+    uint64_t merge_ticket : 8;
+    uint64_t merge_cnt : 8;
+    uint64_t slot_ticket : 22; // slot_ticket用掉剩余全部位
+    uint64_t slot_cnt : 8;
+    uint64_t slot_cnt_2 : 8;
+    uintptr_t main_seg_ptr;
+    uintptr_t main_seg_len;
+    FpBitmapType fp_bitmap[FP_BITMAP_LENGTH];
+    FpBitmapType fp_bitmap_2[FP_BITMAP_LENGTH];
+    uint32_t srq_num; // TODO: remove
+
+    void print(std::string desc = "")
+    {
+        log_err("%s slot_cnt:%lu LD:%lu MS_ptr:%lx MS_len:%lu", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len);
+    }
+} __attribute__((aligned(1)));
+#else
 constexpr uint64_t LOCAL_DEPTH_BITS = 55;
-constexpr uint64_t SIGN_AND_SLOT_CNT_BITS = 64 - LOCAL_DEPTH_BITS;
+constexpr uint64_t SLOT_CNT_SHIFT = 1;
+constexpr uint64_t SLOT_CNT_INC = (1ULL << SLOT_CNT_SHIFT);
 struct FetchMeta
 {
     uint64_t sign : 1;
     uint64_t slot_cnt : 8;
     uint64_t local_depth : LOCAL_DEPTH_BITS;
-};
+} __attribute__((aligned(1)));
 struct CurSegMeta
 {
     uint8_t sign : 1; // 实际中的split_lock可以和sign、depth合并，这里为了不降rdma驱动版本就没有合并。
@@ -161,6 +211,7 @@ struct CurSegMeta
         log_err("%s slot_cnt:%lu LD:%lu MS_ptr:%lx MS_len:%lu srq_num:%u", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len, srq_num);
     }
 } __attribute__((aligned(1)));
+#endif
 
 struct CurSeg
 {
@@ -960,3 +1011,33 @@ inline void fill_recv_wr(ibv_recv_wr *wr, ibv_sge *sge, void *laddr, uint32_t le
 }
 
 uint64_t crc64(const void *data, size_t l);
+
+#if USE_TICKET_HASH
+inline void print_fetch_meta(uint64_t fetch, const std::string &desc = "", uint64_t addval = 0, const std::source_location &location = std::source_location::current()) {
+    const FetchMeta& meta_old = *reinterpret_cast<const FetchMeta*>(&fetch);
+    uint64_t newval = fetch + addval;
+    const FetchMeta& meta_new = *reinterpret_cast<const FetchMeta*>(&newval);
+    constexpr uint64_t slot_per_seg = SLOT_PER_SEG;
+    auto field_fmt = [](auto oldv, auto newv) -> std::string {
+        if (oldv == newv) return std::to_string((unsigned long)newv);
+        else return std::to_string((unsigned long)oldv) + "->" + std::to_string((unsigned long)newv);
+    };
+    auto slot_ticket_fmt = [slot_per_seg](uint64_t oldv, uint64_t newv) -> std::string {
+        std::string oldstr = std::to_string(oldv) + "(" + std::to_string(oldv % slot_per_seg) + ")";
+        std::string newstr = std::to_string(newv) + "(" + std::to_string(newv % slot_per_seg) + ")";
+        if (oldv == newv) return newstr;
+        else return oldstr + "->" + newstr;
+    };
+    log_err("%s [%s:%d] FetchMeta: split_flag=%s, sign=%s, local_depth=%s, merge_ticket=%s, merge_cnt=%s, slot_ticket=%s, slot_cnt=%s, slot_cnt_2=%s", 
+        desc.c_str(), location.file_name(), location.line(),
+        field_fmt((unsigned)meta_old.split_flag, (unsigned)meta_new.split_flag).c_str(),
+        field_fmt((unsigned)meta_old.sign, (unsigned)meta_new.sign).c_str(),
+        field_fmt((unsigned long)meta_old.local_depth, (unsigned long)meta_new.local_depth).c_str(),
+        field_fmt((unsigned long)meta_old.merge_ticket, (unsigned long)meta_new.merge_ticket).c_str(),
+        field_fmt((unsigned long)meta_old.merge_cnt, (unsigned long)meta_new.merge_cnt).c_str(),
+        slot_ticket_fmt((unsigned long)meta_old.slot_ticket, (unsigned long)meta_new.slot_ticket).c_str(),
+        field_fmt((unsigned long)meta_old.slot_cnt, (unsigned long)meta_new.slot_cnt).c_str(),
+        field_fmt((unsigned long)meta_old.slot_cnt_2, (unsigned long)meta_new.slot_cnt_2).c_str()
+    );
+}
+#endif
