@@ -189,6 +189,7 @@ namespace MYHASH
 #endif
                 CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // use seg_meta?
                 co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, 3 * sizeof(uint64_t), lmr->lkey); // don't read bitmap
+                this->offset[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
                 seg_meta[segloc].local_depth = my_seg_meta->local_depth; // 顺便同步元数据，但因为seg_meta不是用alloc.alloc分配的，不能直接读过去
                 seg_meta[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
                 seg_meta[segloc].main_seg_len = my_seg_meta->main_seg_len; // IMPORTANT: 相比dir->segs[segloc]，seg_meta[segloc]多了srq_num和fp_bitmap

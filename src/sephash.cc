@@ -367,6 +367,7 @@ task<> Client::sync_dir()
     for (uint64_t i = current_dir_size; i < DIR_SIZE; i++)
     {
         uint64_t base_idx = i % current_dir_size;
+        this->offset[i].main_seg_ptr = dir->segs[base_idx].main_seg_ptr;
         dir->segs[i].cur_seg_ptr = dir->segs[base_idx].cur_seg_ptr;
         dir->segs[i].local_depth = dir->segs[base_idx].local_depth;
         dir->segs[i].main_seg_ptr = dir->segs[base_idx].main_seg_ptr;
@@ -1286,6 +1287,7 @@ Retry:
     }
 
     co_await std::move(read_meta);
+    this->offset[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
     dir->segs[segloc].local_depth = my_seg_meta->local_depth;
     dir->segs[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
     dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len;

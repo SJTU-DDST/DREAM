@@ -35,8 +35,11 @@
 #define EMBED_FULL_KEY 1 // 在CurSeg中嵌入完整key，避免合并时需要读取完整key。即使Slot大于8B，也可以通过单次SEND发送，且因为FAA slot_cnt不会读取/合并不完整的条目。
 
 // TicketHash
-#define USE_TICKET_HASH 0 // 使用TicketHash TODO: 实现分裂功能
+#define USE_TICKET_HASH 1 // 使用TicketHash TODO: 实现分裂功能
 // 目前吞吐量2274.55Kops比SEND的3326.04Kops低，可能受限于两次FAA、等待合并完成的READ对带宽的消耗
+// Ticket双网卡：insert 3773Kops，update 2212.11Kops，update_zipf99 1447Kops，read Run IOPS: 4824.40Kops
+// RACE双网卡：update Run IOPS: 1917.18Kops，read Run IOPS: 5591.35Kops
+// DREAM双网卡：insert Run IOPS: 4911.60Kops，update Run IOPS: 1610.08Kops，read Run IOPS: 5006.26Kops
 #if USE_TICKET_HASH
 #define RDMA_SIGNAL 0
 #define USE_XRC 0

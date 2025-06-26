@@ -24,9 +24,9 @@
 #define ALLOW_KEY_OVERLAP // 不同客户端之间允许key重叠，默认打开，只有RACE-Partitioned才关闭
 #define FIXED_LOAD_SETUP // 最多8个线程执行load，缓解load线程太多导致争用太多的问题
 #define ONLY_FIRST_CORO_START // 每台机器只有第一个线程的第一个协程调用cli->start和cli->stop，机器内部使用本地的barrier协调，减少网络开销
-// #if MODIFIED
-// #define SPLIT_DEV_NUMA // 打开此宏启用多网卡+NUMA亲和
-// #endif
+#if MODIFIED
+#define SPLIT_DEV_NUMA // 打开此宏启用多网卡+NUMA亲和
+#endif
 #ifdef SPLIT_DEV_NUMA
 #include <numa.h>
 #include <pthread.h>
