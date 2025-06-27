@@ -145,7 +145,9 @@ using FpBitmapType = uint64_t;
 
 #if USE_TICKET_HASH
 constexpr uint64_t CLEAR_MERGE_CNT_PERIOD = 128;
-constexpr uint64_t MERGE_TICKET_SHIFT = 1 * 2 + 8;
+constexpr uint64_t LOCAL_DEPTH_SHIFT = 2;
+constexpr uint64_t LOCAL_DEPTH_INC = (1ULL << LOCAL_DEPTH_SHIFT);
+constexpr uint64_t MERGE_TICKET_SHIFT = LOCAL_DEPTH_SHIFT + 8; // 8 bits for local_depth
 constexpr uint64_t MERGE_TICKET_INC = (1ULL << MERGE_TICKET_SHIFT);
 constexpr uint64_t MERGE_CNT_SHIFT = MERGE_TICKET_SHIFT + 8; // 8 bits for merge_ticket
 constexpr uint64_t MERGE_CNT_INC = (1ULL << MERGE_CNT_SHIFT);
@@ -178,8 +180,7 @@ struct CurSegMeta
     uintptr_t main_seg_ptr;
     uintptr_t main_seg_len;
     FpBitmapType fp_bitmap[FP_BITMAP_LENGTH];
-    FpBitmapType fp_bitmap_2[FP_BITMAP_LENGTH];
-    uint32_t srq_num; // TODO: remove
+    // FpBitmapType fp_bitmap_2[FP_BITMAP_LENGTH];
 
     void print(std::string desc = "")
     {
