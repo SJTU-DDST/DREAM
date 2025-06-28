@@ -1287,6 +1287,40 @@ Retry:
     }
 
     co_await std::move(read_meta);
+    if (is_in_mainseg && end_pos > my_seg_meta->main_seg_len)
+    {
+        // IMPORTANT: 因为本地已经有之前插入时更新的FPTable信息，所以没出发第一次读取时读取整个FPTable的逻辑，导致FPTable过时。
+        // TODO: 这里是临时避免溢出的修复，后续在FPTable中记录每个FP的起始位置和结束位置，读取时直接读取连续的两个条目作为起始和终止(下一个的起始-1)
+        // 这样就可以避免FPTable过时的问题。
+        // log_err("[%lu:%lu:%lu]搜索segloc:%lu的FPTable，FP1:%d FP2:%d start_pos:%lu end_pos:%lu main_seg_len:%lu overflow", cli_id, coro_id, this->key_num, segloc, pattern_fp1, pattern_fp2, start_pos, end_pos, my_seg_meta->main_seg_len);
+
+        // 重新读取FPTable，重新计算start_pos和end_pos，看有没有变化
+        FpInfo *my_fp_info = (FpInfo *)alloc.alloc(sizeof(FpInfo) * MAX_FP_INFO);
+        auto fp_offset = offsetof(Directory, segs) + segloc * sizeof(DirEntry) + offsetof(DirEntry, fp);
+        co_await conn->read(seg_rmr.raddr + fp_offset, seg_rmr.rkey, my_fp_info, sizeof(FpInfo) * MAX_FP_INFO, lmr->lkey);
+        memcpy(dir->segs[segloc].fp, my_fp_info, sizeof(FpInfo) * MAX_FP_INFO);
+
+        start_pos = 0;
+        end_pos = 0;
+        for (uint64_t i = 0; i <= UINT8_MAX; i++)
+        {
+            if (i == UINT8_MAX || i >= pattern_fp1)
+                break;
+            start_pos += dir->segs[segloc].fp[i].num;
+        }
+        end_pos = start_pos + dir->segs[segloc].fp[pattern_fp1].num;
+        // log_err("[%lu:%lu:%lu]重新读取FPTable，segloc:%lu的FPTable信息，start_pos:%lu->%lu end_pos:%lu->%lu main_seg_len:%lu", cli_id, coro_id, this->key_num, segloc, start_pos, end_pos, my_seg_meta->main_seg_len);
+    
+        // 重新读取MainSeg Slots
+        co_await std::move(*read_main_seg);
+        main_size = (end_pos - start_pos) * sizeof(Slot);
+        is_in_mainseg = (main_seg_ptr != 0 && main_size != 0);
+        if (is_in_mainseg) {
+            main_seg = (Slot *)alloc.alloc(main_size);
+            read_main_seg.emplace(conn->read(main_seg_ptr + start_pos * sizeof(Slot), seg_rmr.rkey, main_seg, main_size, lmr->lkey));
+        }
+    }
+
     this->offset[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
     dir->segs[segloc].local_depth = my_seg_meta->local_depth;
     dir->segs[segloc].main_seg_ptr = my_seg_meta->main_seg_ptr;
@@ -1428,6 +1462,7 @@ Retry:
         // 合并两次循环，同时查找fp匹配+fp2匹配的条目和fp匹配但fp2不匹配的条目
         for (uint64_t i = 0; i < end_pos - start_pos; i++)
         {
+            // bool printed = false;
 #if MODIFIED
             bool match_fp2 = (main_seg[i].fp_2 == pattern_fp2);
 #else
@@ -1448,7 +1483,32 @@ Retry:
 #else
                 if (is_valid_ptr(kv_ptr) == false)
                     continue;
+
+                auto offset = main_seg[i].offset;
+                // if (offset < 200 && !printed) {
+                //     printed = true;
+                //     // main_seg[i].print(std::format("main_seg:{} i:{} offset:{} fp:{:x} fp2:{:x}", segloc, i, offset, main_seg[i].fp, main_seg[i].fp_2));
+
+                //     log_err("segloc:%lu", segloc);
+                //     log_err("pattern_fp1:%lx pattern_fp2:%lx dep_info:%x", pattern_fp1, pattern_fp2, dep_info);
+                //     log_err("dir->segs[%lu]: cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_len:%lu local_depth:%lu",
+                //         segloc, dir->segs[segloc].cur_seg_ptr, dir->segs[segloc].main_seg_ptr,
+                //         dir->segs[segloc].main_seg_len, dir->segs[segloc].local_depth);
+                //     log_err("start_pos:%lu end_pos:%lu", start_pos, end_pos); // FIXME: start_pos & end_pos > main_seg_len !!!
+                //     log_err("my_seg_meta: main_seg_ptr:%lx main_seg_len:%lu local_depth:%lu",
+                //         my_seg_meta->main_seg_ptr, my_seg_meta->main_seg_len, my_seg_meta->local_depth);
+                //     //把所有的都打出来
+                //     log_err("发现偏移小于100的条目，范围超出了main_seg_len，segloc:%lu i:%lu offset:%lu fp:%u fp2:%u", segloc, i, offset, main_seg[i].fp, main_seg[i].fp_2);
+                //     for (uint64_t j = 0; j < end_pos - start_pos; j++) {
+                //         main_seg[j].print(std::format("segloc:{} start_pos:{} end_pos:{} main_seg_len:{} j:{}", segloc, start_pos, end_pos, my_seg_meta->main_seg_len, j));
+                //     }
+                //     exit(-1);
+                // }
+#if CORO_DEBUG
+                co_await wo_wait_conn->read(kv_ptr, seg_rmr.rkey, kv_block, (main_seg[i].len) * ALIGNED_SIZE, lmr->lkey, std::source_location::current(), std::format("read kv_block at segloc:{} kv_ptr:{:x} offset:{} i:{} main_seg_len:{} start_pos:{} end_pos:{}", segloc, kv_ptr, offset, i, my_seg_meta->main_seg_len, start_pos, end_pos));
+#else
                 co_await wo_wait_conn->read(kv_ptr, seg_rmr.rkey, kv_block, (main_seg[i].len) * ALIGNED_SIZE, lmr->lkey);
+#endif
 #endif
 
                 // 检查是否是我们要找的key

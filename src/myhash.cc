@@ -78,7 +78,7 @@ namespace MYHASH
             std::shared_lock<std::shared_mutex> read_lock(segloc_locks[segloc]);
 #endif
             co_await conn->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, SLOT_TICKET_INC);
-            // print_fetch_meta(fetch, std::format("增加segloc:{}的slot_ticket，释放锁", segloc), SLOT_TICKET_INC);
+            // print_fetch_meta(fetch, std::format("增加segloc:{}的slot_ticket", segloc), SLOT_TICKET_INC);
         }
         meta = *reinterpret_cast<FetchMeta *>(&fetch);
         seg_meta[segloc].sign = meta.sign;
@@ -102,12 +102,17 @@ namespace MYHASH
             std::unique_lock<std::shared_mutex> write_lock(segloc_locks[segloc], std::try_to_lock);
 #endif
             FetchMeta *my_fetch_meta = (FetchMeta *)alloc.alloc(sizeof(FetchMeta));
+            // int count = 0;
             while (meta.merge_cnt % CLEAR_MERGE_CNT_PERIOD != target_merge_cnt)
             {
                 co_await conn->read(segptr + sizeof(uint64_t), seg_rmr.rkey, my_fetch_meta, sizeof(FetchMeta), lmr->lkey);
                 meta.merge_cnt = my_fetch_meta->merge_cnt;
                 usleep(10);
             }
+            // if (count > 100) {
+            //     log_err("[%lu:%lu:%lu]等到了segloc:%lu的merge_cnt变为%u，当前值为%u，retry:%d",
+            //             cli_id, coro_id, this->key_num, segloc, target_merge_cnt, meta.merge_cnt, count);
+            // }
             seg_meta[segloc].sign = my_fetch_meta->sign;
             if (my_fetch_meta->local_depth > dir->segs[segloc].local_depth)
             {
@@ -258,7 +263,7 @@ namespace MYHASH
         uint64_t main_seg_ptr = old_seg_meta->main_seg_ptr;
         // 1. Read CurSeg
         CurSeg *cur_seg = (CurSeg *)alloc.alloc(sizeof(CurSeg));
-        co_await conn->read(seg_ptr, seg_rmr.rkey, cur_seg, sizeof(CurSeg), lmr->lkey);
+        co_await conn->read(seg_ptr, seg_rmr.rkey, cur_seg, sizeof(CurSeg), lmr->lkey); // TODO: 可以不读filter
 
         // 因为只有cas写入最后一个slot的cli才会进入到对一个segment的split，所以不用对Segment额外加锁
         if (cur_seg->seg_meta.main_seg_ptr != old_seg_meta->main_seg_ptr || cur_seg->seg_meta.local_depth != local_depth)
@@ -294,8 +299,9 @@ namespace MYHASH
 #endif  
         FpInfo fp_info[MAX_FP_INFO] = {};
         cal_fpinfo(new_main_seg->slots, new_seg_len, fp_info); // SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len
-        
-        log_merge("将segloc:%lu/%lu的%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", seg_loc, (1ull << global_depth) - 1, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len, new_seg_len);
+        bool is_update = SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len != new_seg_len;
+        // if (new_seg_len != SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len)
+            // log_err("将segloc:%lu/%lu的%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", seg_loc, (1ull << global_depth) - 1, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len, new_seg_len);
         // 4. Split (为了减少协程嵌套层次的开销，这里就不抽象成单独的函数了)
         if (dir->segs[seg_loc].main_seg_len >= MAX_MAIN_SIZE && local_depth < MAX_DEPTH)
         {
@@ -476,16 +482,17 @@ namespace MYHASH
             auto write_remaining_meta = conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
             // co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, LOCAL_DEPTH_INC); // TODO: 还有slot_cnt，去掉下面的放到这里
             uint64_t fetch = 0;
-            FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
-            if (meta.merge_cnt + 1 == CLEAR_MERGE_CNT_PERIOD)
+            if (cur_seg->seg_meta.merge_cnt + 1 == CLEAR_MERGE_CNT_PERIOD)
             {
                 uint64_t addval = LOCAL_DEPTH_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD - 1) * MERGE_CNT_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG) * SLOT_TICKET_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC;
                 co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, addval);
+                // FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
                 // print_fetch_meta(fetch, std::format("增加segloc:{}的local_depth，清零merge_cnt，减少slot_ticket，并清零slot_cnt", seg_loc), addval);
             }
             else
             {
                 co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, LOCAL_DEPTH_INC + MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
+                // FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
                 // print_fetch_meta(fetch, std::format("增加segloc:{}的local_depth&merge_cnt并清零slot_cnt", seg_loc), LOCAL_DEPTH_INC + MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
             }
             co_await std::move(write_remaining_meta);
@@ -539,6 +546,8 @@ namespace MYHASH
         co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
 
         // 5.2 Update new-main-ptr for DirEntries
+        if (dir->global_depth < local_depth) co_await check_gd();
+        assert_require(dir->global_depth >= local_depth);
         uint64_t stride = (1llu) << (dir->global_depth - local_depth);
         uint64_t cur_seg_loc;
         uint64_t first_seg_loc = seg_loc & ((1ull << local_depth) - 1);
@@ -571,19 +580,20 @@ namespace MYHASH
         // 5.3 Change Sign (Equal to unlock this segment)
 #if USE_TICKET_HASH
         uint64_t fetch = 0;
-        FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
-        if (meta.merge_cnt + 1 == CLEAR_MERGE_CNT_PERIOD)
+        if (cur_seg->seg_meta.merge_cnt + 1 == CLEAR_MERGE_CNT_PERIOD)
         {
             // 如果cur_seg->seg_meta.merge_cnt在本次FAA后会上升到128，则改为将merge_cnt减少127，同时将slot_ticket减少128*SLOT_PER_SEG（SLOT_CNT_INC还是和原来一样减少SLOT_PER_SEG）
             // merge_cnt减少CLEAR_MERGE_CNT_PERIOD-1，slot_ticket减少CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG，清零slot_cnt
             uint64_t addval = -(int64_t)(CLEAR_MERGE_CNT_PERIOD - 1) * MERGE_CNT_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG) * SLOT_TICKET_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC;
             co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, addval);
-            // print_fetch_meta(fetch, std::format("清零segloc:{}的merge_cnt，减少slot_ticket，并清零slot_cnt", seg_loc), addval);
+            // FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
+            // print_fetch_meta(fetch, std::format("[{}:{}:{}]清零segloc:{}的merge_cnt，减少slot_ticket，并清零slot_cnt", cli_id, coro_id, this->key_num, seg_loc), addval);
         }
         else
         {
             co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
-            // print_fetch_meta(fetch, std::format("增加segloc:{}的merge_cnt并清零slot_cnt", seg_loc), MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
+            // FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
+            // print_fetch_meta(fetch, std::format("[{}:{}:{}]增加segloc:{}的merge_cnt并清零slot_cnt", cli_id, coro_id, this->key_num, seg_loc), MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
         }
        
 #else

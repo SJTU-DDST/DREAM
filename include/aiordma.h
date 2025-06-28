@@ -57,6 +57,11 @@ constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t)));
 #else
 constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(uint8_t)));
 #endif
+
+constexpr uint64_t MAX_FP_INFO = 256;
+constexpr uint64_t MAX_DEPTH = 20;
+constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
+
 struct Slot
 {
 #if EMBED_FULL_KEY
@@ -125,6 +130,8 @@ struct Slot
     
     bool is_valid() const
     {
+        // if (local_depth > MAX_DEPTH)
+        //     return false;
         if (!is_valid_ptr(offset))
             return false;
 #if MODIFIED
@@ -248,10 +255,6 @@ struct CurSeg
         return ss.str();
     }
 } __attribute__((aligned(1)));
-
-constexpr uint64_t MAX_FP_INFO = 256;
-constexpr uint64_t MAX_DEPTH = 20;
-constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
 struct FpInfo
 {
     uint8_t num; // 数量 TODO: uint8_t可能溢出，改成uint16_t记录开始的条目位置，读取时同时读取该fp的开始和下一个fp的开始。
