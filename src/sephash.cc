@@ -1059,8 +1059,18 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
 
         // 4.2 Update new-main-ptr for DirEntries // IMPORTANT: 远端申请新的CurSeg和MainSeg
         uintptr_t new_cur_ptr = ralloc.alloc(sizeof(CurSeg), true);
+#if REUSE_MAIN_SEG
+        uintptr_t new_main_ptr1 = dir->segs[seg_loc].main_seg_ptr;
+        if (new_main_ptr1 == 0)
+        {
+            new_main_ptr1 = ralloc.alloc(MAX_MAIN_SEG_SIZE, true);
+            dir->segs[seg_loc].main_seg_ptr = new_main_ptr1;
+        }
+        uintptr_t new_main_ptr2 = ralloc.alloc(MAX_MAIN_SEG_SIZE, true);
+#else
         uintptr_t new_main_ptr1 = ralloc.alloc(sizeof(Slot) * off1);
         uintptr_t new_main_ptr2 = ralloc.alloc(sizeof(Slot) * off2);
+#endif
 
         // a. 同步远端global depth, 确认split类型
         co_await check_gd();
@@ -1165,12 +1175,16 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
     // 5.1 Write New MainSeg to Remote && Update CurSegMeta
     // a. write main segment
 
-    uintptr_t new_main_ptr = ralloc.alloc(new_seg_len * sizeof(Slot), true); // IMPORTANT: 在MN分配new main seg TODO: 复用现有的？
-    // uint64_t new_main_len = dir->segs[seg_loc].main_seg_len + SLOT_PER_SEG;
-    wo_wait_conn->pure_write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots,
-                             sizeof(Slot) * new_seg_len, lmr->lkey);
-    // co_await wo_wait_conn->write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots,
-    //                             sizeof(Slot) * new_seg_len, lmr->lkey);
+#if REUSE_MAIN_SEG
+    uintptr_t new_main_ptr = dir->segs[seg_loc].main_seg_ptr;
+    if (new_main_ptr == 0) {
+        new_main_ptr = ralloc.alloc(MAX_MAIN_SEG_SIZE, true); // 大小是2 * MAX_MAIN_SIZE，因为还需要额外存储SLOT_PER_SEG个Slot
+        dir->segs[seg_loc].main_seg_ptr = new_main_ptr;       // 更新dir中的main_seg_ptr
+    }
+#else
+    uintptr_t new_main_ptr = ralloc.alloc(new_seg_len * sizeof(Slot), true); // IMPORTANT: 在MN分配new main seg，注意 FIXME: ralloc没有free功能 // main_seg_size + sizeof(Slot) * SLOT_PER_SEG
+#endif
+    wo_wait_conn->pure_write(new_main_ptr, seg_rmr.rkey, new_main_seg->slots, sizeof(Slot) * new_seg_len, lmr->lkey);
 
     // b. Update MainSegPtr/Len and fp_bitmap
     cur_seg->seg_meta.main_seg_ptr = new_main_ptr;
@@ -1489,8 +1503,8 @@ Retry:
                 if (is_valid_ptr(kv_ptr) == false)
                     continue;
 
-                if (main_seg[i].local_depth > MAX_DEPTH || main_seg[i].len != 1 || main_seg[i].offset == 0 || main_seg[i].offset >= 0x100000000000)
-                    continue; // temporary fix
+                // if (main_seg[i].local_depth > MAX_DEPTH || main_seg[i].len != 1 || main_seg[i].offset == 0 || main_seg[i].offset >= 0x100000000000)
+                //     continue;
 
                 auto offset = main_seg[i].offset;
                 // if (offset < 200 && !printed) {

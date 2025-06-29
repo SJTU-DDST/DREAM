@@ -193,11 +193,7 @@ KVBlock *InitKVBlock(Slice *key, Slice *value, Alloc *alloc)
 
 struct MainSeg
 {
-// #if REUSE_MAIN_SEG
-//     Slot slots[2 * MAX_MAIN_SIZE]; // 相比MAX_MAIN_SIZE，还可能多出SLOT_PER_SEG个条目
-// #else
     Slot slots[0];
-// #endif
 
     void print(uint64_t length) {
         printf("MainSeg with %lu slots\n", length);
