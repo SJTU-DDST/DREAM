@@ -1258,7 +1258,12 @@ Retry:
     // TODO: FPTable改成记录每个FP的起始位置，读取时读取连续的两个条目作为起始和终止(下一个的起始-1)
 
     uintptr_t cur_seg_ptr = dir->segs[segloc].cur_seg_ptr;
-    CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
+    if (!cur_seg_ptr) {
+        co_await check_gd(segloc, false, true);
+        cur_seg_ptr = dir->segs[segloc].cur_seg_ptr;
+        assert_require(cur_seg_ptr);
+    }
+    CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta)); // TODO: 可以将local_depth集成在MainSeg条目中，或每个fp开始位置，这样避免额外读取my_seg_meta
     auto read_meta = conn->read(cur_seg_ptr + sizeof(uint64_t), seg_rmr.rkey, my_seg_meta, 3 * sizeof(uint64_t), lmr->lkey);
     auto read_bit_map = conn->read(cur_seg_ptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType), seg_rmr.rkey, &my_seg_meta->fp_bitmap[bit_loc], sizeof(FpBitmapType), lmr->lkey);
 
@@ -1483,6 +1488,9 @@ Retry:
 #else
                 if (is_valid_ptr(kv_ptr) == false)
                     continue;
+
+                if (main_seg[i].local_depth > MAX_DEPTH || main_seg[i].len != 1 || main_seg[i].offset == 0 || main_seg[i].offset >= 0x100000000000)
+                    continue; // temporary fix
 
                 auto offset = main_seg[i].offset;
                 // if (offset < 200 && !printed) {
