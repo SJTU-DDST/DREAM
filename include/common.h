@@ -32,7 +32,7 @@
 #define SPLIT_LOCAL_LOCK 1 // 合并/分裂时在本地上锁，参考Sherman
 #define DISABLE_OPTIMISTIC_SPLIT 0 // 禁用客户端的乐观分裂检测，用于性能分解实验
 #define EMBED_FULL_KEY 1 // 在CurSeg中嵌入完整key，避免合并时需要读取完整key。即使Slot大于8B，也可以通过单次SEND发送，且因为FAA slot_cnt不会读取/合并不完整的条目。
-
+#define CACHE_FILTER 0 // 使用缓存过滤器，减少对CurSeg的读取。目前仅实现插入还未实现读取。插入性能启用3284，禁用3854，禁用但u64 filter 3659
 // TicketHash
 #define USE_TICKET_HASH 1 // 使用TicketHash TODO: 实现分裂功能
 // 目前吞吐量2274.55Kops比SEND的3326.04Kops低，可能受限于两次FAA、等待合并完成的READ对带宽的消耗
@@ -46,9 +46,11 @@
 #define RDMA_SIGNAL 1 // 创建专用于SEND合并完成信号的QP。
 #define USE_XRC 1     // 使用XRC
 #endif
-#define SIMULATE_FAA_FILTER 1 // 模拟FAA增加过滤器，而非使用原来的WRITE
-// TODO: 先看下多少%读取命中CurSeg/MainSeg，评估减少CurSeg读放大的必要性
-// 然后在读取CurSeg时只读取8 slots，模拟减少读放大的影响
+// #define SIMULATE_FAA_FILTER 1 // 模拟FAA增加过滤器，而非使用原来的WRITE
+// TODO: 先看下多少%读取命中CurSeg/MainSeg【50%?但之前有没完全清空filter的问题，已经修复】，评估减少CurSeg读放大的必要性
+// 然后在读取CurSeg时只读取8 slots，模拟减少读放大的影响【7500Kops->9000Kops!】
+// 修复后的[6%命中 10985Kops -> 不读取CurSeg 10279Kops] 不需要缓存？
+// ycsbb?[30% 7334Kops]
 // 模拟WRITE额外写一次Slot到读取缓存的影响
 
 // SEPHASH使用REUSE_MAIN_SEG

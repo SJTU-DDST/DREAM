@@ -62,6 +62,38 @@ constexpr uint64_t MAX_FP_INFO = 256;
 constexpr uint64_t MAX_DEPTH = 20;
 constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
 
+#if CACHE_FILTER
+struct CacheSlot
+{
+    uint8_t len : 3;
+    uint8_t invalid : 1;
+    uint8_t dep : 4;
+    uint64_t offset : 48;
+    uint8_t fp_2;
+    operator uint64_t()
+    {
+        return *(uint64_t *)this;
+    }
+    CacheSlot(uint64_t u)
+    {
+        *this = *(CacheSlot *)(&u);
+    }
+    void print(const std::string &message) const
+    {
+        log_err("%s\t len:%d\t invalid:%d\t dep:%02d\t offset:%012lx\t fp_2:%02x\t size:%ld",
+               message.c_str(), len, invalid, dep, offset, fp_2, sizeof(CacheSlot));
+    }
+    int get_num() const
+    {
+        if (invalid)
+            return 2;
+        if (offset == 0)
+            return 0;
+        return 1;
+    }
+} __attribute__((aligned(1)));
+#endif
+
 struct Slot
 {
 #if EMBED_FULL_KEY
@@ -95,21 +127,23 @@ struct Slot
     }
     void print(uint64_t slot_id = -1) const
     {
-        if (slot_id != -1)
-            printf("slot_id:%lu\t", slot_id);
-        printf("fp:%02x\t", fp);
-        printf("fp_2:%02x\t", fp_2);
-        printf("len:%d\t", len);
-        printf("sign:%d\t", sign);
-        printf("dep:%02d\t", dep);
-        printf("offset:%012lx\t", offset);
-        printf("local_depth:%d\t", local_depth);
-        printf("size:%ld\n", sizeof(Slot));
+#if EMBED_FULL_KEY
+        log_err("slot_id:%lu\t fp:%016lx\t fp_2:%016lx\t len:%d\t sign:%d\t dep:%02d\t offset:%012lx\t local_depth:%d\t size:%ld",
+            slot_id, fp, fp_2, len, sign, dep, offset, local_depth, sizeof(Slot));
+#else
+        log_err("slot_id:%lu\t fp:%02x\t fp_2:%02x\t len:%d\t sign:%d\t dep:%02d\t offset:%012lx\t local_depth:%d\t size:%ld",
+            slot_id, fp, fp_2, len, sign, dep, offset, local_depth, sizeof(Slot));
+#endif
     }
     void print(const std::string &message) const
     {
+#if EMBED_FULL_KEY
+        log_err("%s\t fp:%016lx\t fp_2:%016lx\t len:%d\t sign:%d\t dep:%02d\t offset:%012lx\t local_depth:%d\t size:%ld",
+               message.c_str(), fp, fp_2, len, sign, dep, offset, local_depth, sizeof(Slot));
+#else
         log_err("%s\t fp:%02x\t fp_2:%02x\t len:%d\t sign:%d\t dep:%02d\t offset:%012lx\t local_depth:%d\t size:%ld",
                message.c_str(), fp, fp_2, len, sign, dep, offset, local_depth, sizeof(Slot));
+#endif
     }
     
     std::string to_string(uint64_t slot_id = -1) const
@@ -144,7 +178,11 @@ struct Slot
 
 #if LARGER_FP_FILTER_GRANULARITY
 constexpr size_t FP_BITMAP_LENGTH = 1024;
+#if CACHE_FILTER
+using FpBitmapType = uint64_t;
+#else
 using FpBitmapType = uint8_t;
+#endif
 #else
 constexpr size_t FP_BITMAP_LENGTH = 16;
 using FpBitmapType = uint64_t;

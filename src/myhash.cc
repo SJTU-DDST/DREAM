@@ -177,10 +177,21 @@ namespace MYHASH
 #else
         auto bit_loc = get_fp_bit(tmp->fp, tmp->fp_2);
 #endif
+#if CACHE_FILTER
+        CacheSlot *my_cache_slot = (CacheSlot *)alloc.alloc(sizeof(CacheSlot));
+        my_cache_slot->len = tmp->len;
+        my_cache_slot->invalid = 0;
+        my_cache_slot->dep = tmp->dep;
+        my_cache_slot->offset = tmp->offset;
+        my_cache_slot->fp_2 = tmp->fp_2;
+        uint64_t fetch_cache_slot_num = 0;
+        auto write_fp_bitmap = conn->cas(segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType), seg_rmr.rkey, fetch_cache_slot_num, *(uint64_t *)my_cache_slot);
+#else
         seg_meta[segloc].fp_bitmap[bit_loc] = 1;
         CurSegMeta *my_seg_meta = (CurSegMeta *)alloc.alloc(sizeof(CurSegMeta));
         my_seg_meta->fp_bitmap[bit_loc] = 1;
         auto write_fp_bitmap = conn->write(segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType), seg_rmr.rkey, my_seg_meta->fp_bitmap + bit_loc, sizeof(FpBitmapType), lmr->lkey);
+#endif
 #endif
         // RTT2. FAA slot_cnt
         auto faa_slot_cnt = conn->fetch_add(segptr + sizeof(uint64_t), seg_rmr.rkey, fetch, SLOT_CNT_INC);
@@ -190,6 +201,15 @@ namespace MYHASH
         co_await conn->write(segptr + sizeof(uint64_t) + sizeof(CurSegMeta) + (meta.slot_ticket % SLOT_PER_SEG) * sizeof(Slot), seg_rmr.rkey, tmp, sizeof(Slot), lmr->lkey); // TODO: can delay
 #endif
         co_await std::move(write_fp_bitmap); // TODO: can delay
+#if CACHE_FILTER
+        CacheSlot fetch_cache_slot = *reinterpret_cast<CacheSlot *>(&fetch_cache_slot_num);
+        if (fetch_cache_slot.get_num() == 1)
+        {
+            my_cache_slot->invalid = 1; // 设置为无效
+            auto write_cache_slot = conn->cas(segptr + 4 * sizeof(uint64_t) + bit_loc * sizeof(FpBitmapType), seg_rmr.rkey, fetch_cache_slot_num, *(uint64_t *)my_cache_slot);
+            co_await std::move(write_cache_slot); // TODO: 可以不等待完成
+        }
+#endif
         co_await std::move(faa_slot_cnt); 
         // print_fetch_meta(fetch, std::format("增加segloc:{}的slot_cnt", segloc), SLOT_CNT_INC);
         meta = *reinterpret_cast<FetchMeta *>(&fetch);
@@ -542,7 +562,7 @@ namespace MYHASH
         cur_seg->seg_meta.main_seg_ptr = new_main_ptr;
         cur_seg->seg_meta.main_seg_len = new_seg_len; // main_seg_size / sizeof(Slot) + SLOT_PER_SEG;
         this->offset[seg_loc].offset = 0;
-        memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(uint64_t) * 16);
+        memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(FpBitmapType) * FP_BITMAP_LENGTH);
         co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
 
         // 5.2 Update new-main-ptr for DirEntries

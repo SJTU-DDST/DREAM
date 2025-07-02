@@ -1157,7 +1157,7 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
         cur_seg->seg_meta.main_seg_len = off1;
         cur_seg->seg_meta.local_depth = local_depth + 1; // IMPORTANT: local_depth+1，这是让客户端感知到split的关键
         // cur_seg->seg_meta.sign = !cur_seg->seg_meta.sign; // 对old cur_seg的清空放到最后?保证同步。
-        memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(uint64_t) * 16);
+        memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(FpBitmapType) * FP_BITMAP_LENGTH);
         wo_wait_conn->pure_write(cur_seg->seg_meta.main_seg_ptr, seg_rmr.rkey, new_seg_1, sizeof(Slot) * off1, lmr->lkey);
         co_await conn->write(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 1, sizeof(CurSegMeta),lmr->lkey);
         // co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
@@ -1190,7 +1190,7 @@ task<> Client::Split(uint64_t seg_loc, uintptr_t seg_ptr, CurSegMeta *old_seg_me
     cur_seg->seg_meta.main_seg_ptr = new_main_ptr;
     cur_seg->seg_meta.main_seg_len = new_seg_len; // main_seg_size / sizeof(Slot) + SLOT_PER_SEG;
     this->offset[seg_loc].offset = 0;
-    memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(uint64_t) * 16);
+    memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(FpBitmapType) * FP_BITMAP_LENGTH);
     co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
 
     // 5.2 Update new-main-ptr for DirEntries
@@ -1389,6 +1389,16 @@ Retry:
         read_cur_seg.emplace(conn->read(cur_seg_ptr + sizeof(uint64_t) + sizeof(CurSegMeta), seg_rmr.rkey, curseg_slots, sizeof(Slot) * slots_to_read, lmr->lkey));
     }
 
+    // static uint64_t search_cnt = 0;
+    // static uint64_t in_curseg_cnt = 0;
+    // search_cnt++;
+    // if (is_in_curseg)
+    //     in_curseg_cnt++;
+    // if (search_cnt % 100000 == 0)
+    // {
+    //     log_err("search统计: 总次数:%lu, is_in_curseg=1次数:%lu, 占比:%.4f", search_cnt, in_curseg_cnt, (double)in_curseg_cnt / search_cnt);
+    // }
+
     // 4. Check Depth && MainSegPtr
     if (is_in_mainseg && my_seg_meta->main_seg_ptr != this->offset[segloc].main_seg_ptr)
     { // 读取到的main_seg_ptr和本地的不一致，意味着读到的过滤MainSeg是错误的，需要重新读取
@@ -1437,6 +1447,26 @@ Retry:
     if (is_in_curseg) // CurSeg比MainSeg更新
     {
         co_await std::move(*read_cur_seg);
+
+        // 统计读到的slots中有多少个的fp匹配
+        // int fp_matched_count = 0;
+        // static std::map<uint64_t, int> fp_count_map;
+        // static int read_curseg_count = 0;
+        // read_curseg_count++;
+        // for (uint64_t i = slots_to_read - 1; i != -1; i--)
+        //     if (curseg_slots[i].fp == pattern_fp1 && curseg_slots[i].fp_2 == pattern_fp2)
+        //         fp_matched_count++;
+        // fp_count_map[fp_matched_count]++;
+        // if (read_curseg_count % 100000 == 0) // 都是不match？
+        // {
+        //     log_err("read_curseg_count:%d, fp_count_map size:%lu", read_curseg_count, fp_count_map.size());
+        //     for (const auto &pair : fp_count_map)
+        //     {
+        //         log_err("fp_matched_count:%d, times:%d", pair.first, pair.second);
+        //         // 有点夸张，有时候128个slot都是matched，这时候打印出来看下。发现key确实都是0.
+        //     }
+        // }
+
         for (uint64_t i = slots_to_read - 1; i != -1; i--)
         {
 #if MODIFIED
