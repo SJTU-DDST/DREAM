@@ -94,8 +94,21 @@ namespace MYHASH
             }
             if (!need_retry) tmp->local_depth = dir->segs[segloc].local_depth; // 如果不需要重试，则更新local_depth，避免在合并时去除过时条目
         }
-        // bool is_write_buffer_1 = true; // (meta.slot_ticket < (SLOT_PER_SEG / 2)); 先只用一个buffer
+        // bool is_write_buffer_1 = true; // (meta.slot_ticket < (SLOT_PER_SEG_HALF)); 先只用一个buffer
+#if DOUBLE_BUFFER_MERGE
+        // TODO: DOUBLE_BUFFER_MERGE下
+        // slot_ticket = 0, 1, ..., SLOT_PER_SEG_HALF - 1时，target_merge_cnt = 0
+        // slot_ticket = SLOT_PER_SEG_HALF, SLOT_PER_SEG_HALF + 1, ..., SLOT_PER_SEG - 1时，target_merge_cnt = 1
+        // ...
+        int target_merge_cnt = (meta.slot_ticket / SLOT_PER_SEG_HALF) % CLEAR_MERGE_CNT_PERIOD; // TODO: 只要merge_ticket达到就可以开始合并
+#else
+        // 常规情况下：
+        // slot_ticket = 0, 1, ..., SLOT_PER_SEG - 1时，target_merge_cnt = 0
+        // slot_ticket = SLOT_PER_SEG, SLOT_PER_SEG + 1, ..., 2 * SLOT_PER_SEG - 1时，target_merge_cnt = 1
+        // ...
         int target_merge_cnt = (meta.slot_ticket / SLOT_PER_SEG) % CLEAR_MERGE_CNT_PERIOD;
+#endif
+        // print_fetch_meta(fetch, std::format("增加segloc:{}的slot_ticket, target_merge_cnt:{}", segloc, target_merge_cnt), SLOT_TICKET_INC);
         if (meta.merge_cnt % CLEAR_MERGE_CNT_PERIOD != target_merge_cnt)
         {
 #if SPLIT_LOCAL_LOCK
@@ -198,7 +211,12 @@ namespace MYHASH
 
 #if USE_TICKET_HASH
         // RTT2. write slot
+#if NEW_MERGE
+        co_await conn->write(segptr + sizeof(uint64_t) + sizeof(CurSegMeta) + (meta.slot_ticket % (SLOT_PER_SEG * 2)) * sizeof(Slot), seg_rmr.rkey, tmp, sizeof(Slot), lmr->lkey);
+        // log_err("[%lu:%lu:%lu]写入segloc:%lu的WriteBuffer slots[%lu]", cli_id, coro_id, this->key_num, segloc, meta.slot_ticket % (SLOT_PER_SEG * 2));
+#else
         co_await conn->write(segptr + sizeof(uint64_t) + sizeof(CurSegMeta) + (meta.slot_ticket % SLOT_PER_SEG) * sizeof(Slot), seg_rmr.rkey, tmp, sizeof(Slot), lmr->lkey); // TODO: can delay
+#endif
 #endif
         co_await std::move(write_fp_bitmap); // TODO: can delay
 #if CACHE_FILTER
@@ -234,8 +252,19 @@ namespace MYHASH
 #endif
         }
         // check if need split
+#if DOUBLE_BUFFER_MERGE
+        if (seg_meta[segloc].slot_cnt == 0 || seg_meta[segloc].slot_cnt == SLOT_PER_SEG_HALF)
+#else
         if (seg_meta[segloc].slot_cnt == 0)
+#endif
         {
+#if DOUBLE_BUFFER_MERGE
+            if (seg_meta[segloc].slot_cnt == 0) {
+                // log_err("[%lu:%lu:%lu]segloc:%lu的slot_cnt为0，合并后半部分WriteBuffer！", cli_id, coro_id, this->key_num, segloc);
+            } else {
+                // log_err("[%lu:%lu:%lu]segloc:%lu的slot_cnt为%d，合并前半部分WriteBuffer！", cli_id, coro_id, this->key_num, SLOT_PER_SEG_HALF, segloc);
+            }
+#endif
             {
 #if SPLIT_LOCAL_LOCK
                 std::unique_lock<std::shared_mutex> write_lock(segloc_locks[segloc], std::try_to_lock);
@@ -251,7 +280,14 @@ namespace MYHASH
                 #if TEST_SEG_SIZE
                 dir->segs[segloc].main_seg_len = my_seg_meta->main_seg_len;
                 #endif
-                co_await Split(segloc, segptr, my_seg_meta);
+#if NEW_MERGE
+                seg_meta[segloc].merge_cnt = my_seg_meta->merge_cnt;
+                // if (seg_meta[segloc].merge_cnt % 2 == 0)
+                //     log_err("[%lu:%lu:%lu]segloc:%lu的merge_cnt为%u，合并前半部分WriteBuffer！", cli_id, coro_id, this->key_num, segloc, seg_meta[segloc].merge_cnt);
+                // else
+                //     log_err("[%lu:%lu:%lu]segloc:%lu的merge_cnt为%u，合并后半部分WriteBuffer！", cli_id, coro_id, this->key_num, segloc, seg_meta[segloc].merge_cnt);
+#endif
+                co_await Split(segloc, segptr, my_seg_meta); // TODO: 后台线程Split
             }
             if (need_retry) goto Retry;
             perf.push_insert();
@@ -301,9 +337,48 @@ namespace MYHASH
 
         // 3. Sort Segment
         MainSeg *new_main_seg = (MainSeg *)alloc.alloc(main_seg_size + sizeof(Slot) * SLOT_PER_SEG);
-#if READ_FULL_KEY_ON_FP_COLLISION
+// #if READ_FULL_KEY_ON_FP_COLLISION
 #if EMBED_FULL_KEY
+#if DOUBLE_BUFFER_MERGE
+        // 如果if (seg_meta[seg_loc].slot_cnt != 0) 合并cur_seg->slots的前半部分，即slots[0... SLOT_PER_SEG_HALF - 1]
+        // 否则合并后半部分
+        uint64_t new_seg_len = 0;
+        if (seg_meta[seg_loc].slot_cnt != 0) {
+            new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG_HALF, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, false);
+            // log_err("[%lu:%lu:%lu]segloc:%lu的slot_cnt为%d，合并前半部分WriteBuffer！将%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", cli_id, coro_id, this->key_num, seg_loc, SLOT_PER_SEG_HALF, SLOT_PER_SEG_HALF, dir->segs[seg_loc].main_seg_len, new_seg_len);
+        } else {
+            new_seg_len = co_await merge_insert(cur_seg->slots + SLOT_PER_SEG_HALF, SLOT_PER_SEG_HALF, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, false);
+            // log_err("[%lu:%lu:%lu]segloc:%lu的slot_cnt为0，合并后半部分WriteBuffer！将%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", cli_id, coro_id, this->key_num, seg_loc, SLOT_PER_SEG_HALF, dir->segs[seg_loc].main_seg_len, new_seg_len);
+        }
+#else
+#if NEW_MERGE
+        // 打印cur_seg->slots和slots_2
+        // for (int i = 0; i < SLOT_PER_SEG; i++) {
+        //     cur_seg->slots[i].print(std::format("cur_seg->slots[{}]", i));
+        // }
+        // for (int i = 0; i < SLOT_PER_SEG; i++) {
+        //     cur_seg->slots_2[i].print(std::format("cur_seg->slots_2[{}]", i));
+        // }
+
+        uint64_t new_seg_len = 0;
+        if (old_seg_meta->merge_cnt % 2 == 0)
+        {
+            new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, true);
+            // log_err("[%lu:%lu:%lu]segloc:%lu的merge_cnt为%u，合并前半部分WriteBuffer！将%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", cli_id, coro_id, this->key_num, seg_loc, old_seg_meta->merge_cnt, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len, new_seg_len);
+        }
+        else {
+            new_seg_len = co_await merge_insert(cur_seg->slots_2, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, true);
+            // log_err("[%lu:%lu:%lu]segloc:%lu的merge_cnt为%u，合并后半部分WriteBuffer！将%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", cli_id, coro_id, this->key_num, seg_loc, old_seg_meta->merge_cnt, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len, new_seg_len);
+        }
+
+        // 打印new_main_seg
+        // for (int i = 0; i < new_seg_len; i++) {
+        //     new_main_seg->slots[i].print(std::format("new_main_seg->slots[{}]", i));
+        // }
+#else
         uint64_t new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, true);
+#endif
+#endif
 #else
         static thread_local int counter = 0;
         bool dedup = false;
@@ -314,12 +389,11 @@ namespace MYHASH
 
         uint64_t new_seg_len = co_await merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth, dedup);
 #endif
-#else
-        uint64_t new_seg_len = merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth);
-#endif  
+// #else
+//         uint64_t new_seg_len = merge_insert(cur_seg->slots, SLOT_PER_SEG, main_seg->slots, dir->segs[seg_loc].main_seg_len, new_main_seg->slots, cur_seg->seg_meta.local_depth);
+// #endif  
         FpInfo fp_info[MAX_FP_INFO] = {};
-        cal_fpinfo(new_main_seg->slots, new_seg_len, fp_info); // SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len
-        bool is_update = SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len != new_seg_len;
+        cal_fpinfo(new_main_seg->slots, new_seg_len, fp_info);
         // if (new_seg_len != SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len)
             // log_err("将segloc:%lu/%lu的%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", seg_loc, (1ull << global_depth) - 1, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len, new_seg_len);
         // 4. Split (为了减少协程嵌套层次的开销，这里就不抽象成单独的函数了)
@@ -505,15 +579,24 @@ namespace MYHASH
             if (cur_seg->seg_meta.merge_cnt + 1 == CLEAR_MERGE_CNT_PERIOD)
             {
                 uint64_t addval = LOCAL_DEPTH_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD - 1) * MERGE_CNT_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG) * SLOT_TICKET_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC;
+#if DOUBLE_BUFFER_MERGE
+                if (seg_meta[seg_loc].slot_cnt != 0) // 如果slot_cnt==SLOT_PER_SEG，则不清零
+                    addval = LOCAL_DEPTH_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD - 1) * MERGE_CNT_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG_HALF) * SLOT_TICKET_INC;
+                else
+                    addval = LOCAL_DEPTH_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD - 1) * MERGE_CNT_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG_HALF) * SLOT_TICKET_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC;
+#endif
                 co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, addval);
-                // FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
                 // print_fetch_meta(fetch, std::format("增加segloc:{}的local_depth，清零merge_cnt，减少slot_ticket，并清零slot_cnt", seg_loc), addval);
             }
             else
             {
-                co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, LOCAL_DEPTH_INC + MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
-                // FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
-                // print_fetch_meta(fetch, std::format("增加segloc:{}的local_depth&merge_cnt并清零slot_cnt", seg_loc), LOCAL_DEPTH_INC + MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
+                uint64_t addval = LOCAL_DEPTH_INC + MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC;
+#if DOUBLE_BUFFER_MERGE
+                if (seg_meta[seg_loc].slot_cnt != 0) // 如果slot_cnt==SLOT_PER_SEG，则不清零
+                    addval = LOCAL_DEPTH_INC + MERGE_CNT_INC;
+#endif
+                co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, addval);
+                // print_fetch_meta(fetch, std::format("增加segloc:{}的local_depth&merge_cnt并清零slot_cnt", seg_loc), addval);
             }
             co_await std::move(write_remaining_meta);
 #else
@@ -605,17 +688,26 @@ namespace MYHASH
             // 如果cur_seg->seg_meta.merge_cnt在本次FAA后会上升到128，则改为将merge_cnt减少127，同时将slot_ticket减少128*SLOT_PER_SEG（SLOT_CNT_INC还是和原来一样减少SLOT_PER_SEG）
             // merge_cnt减少CLEAR_MERGE_CNT_PERIOD-1，slot_ticket减少CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG，清零slot_cnt
             uint64_t addval = -(int64_t)(CLEAR_MERGE_CNT_PERIOD - 1) * MERGE_CNT_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG) * SLOT_TICKET_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC;
+#if DOUBLE_BUFFER_MERGE
+            if (seg_meta[seg_loc].slot_cnt != 0) // 如果slot_cnt==SLOT_PER_SEG，则不清零
+                addval = -(int64_t)(CLEAR_MERGE_CNT_PERIOD - 1) * MERGE_CNT_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG_HALF) * SLOT_TICKET_INC;
+            else
+                addval = -(int64_t)(CLEAR_MERGE_CNT_PERIOD - 1) * MERGE_CNT_INC - (int64_t)(CLEAR_MERGE_CNT_PERIOD * SLOT_PER_SEG_HALF) * SLOT_TICKET_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC;
+#endif
             co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, addval);
-            // FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
             // print_fetch_meta(fetch, std::format("[{}:{}:{}]清零segloc:{}的merge_cnt，减少slot_ticket，并清零slot_cnt", cli_id, coro_id, this->key_num, seg_loc), addval);
         }
         else
         {
-            co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
-            // FetchMeta meta = *reinterpret_cast<FetchMeta *>(&fetch);
-            // print_fetch_meta(fetch, std::format("[{}:{}:{}]增加segloc:{}的merge_cnt并清零slot_cnt", cli_id, coro_id, this->key_num, seg_loc), MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC);
+            uint64_t addval = MERGE_CNT_INC - (int64_t)(SLOT_PER_SEG)*SLOT_CNT_INC;
+#if DOUBLE_BUFFER_MERGE
+            if (seg_meta[seg_loc].slot_cnt != 0) // 如果slot_cnt==SLOT_PER_SEG，则不清零
+                addval = MERGE_CNT_INC;
+#endif
+            co_await conn->fetch_add(seg_ptr + sizeof(uint64_t), seg_rmr.rkey, fetch, addval);
+            // print_fetch_meta(fetch, std::format("[{}:{}:{}]增加segloc:{}的merge_cnt并按需调整slot_cnt", cli_id, coro_id, this->key_num, seg_loc), addval);
         }
-       
+
 #else
         cur_seg->seg_meta.sign = !cur_seg->seg_meta.sign;
         cur_seg->seg_meta.slot_cnt = 0;
@@ -634,6 +726,104 @@ namespace MYHASH
     task<uint64_t> Client::merge_insert(Slot *data, uint64_t len, Slot *old_seg, uint64_t old_seg_len, Slot *new_seg, uint64_t local_depth, bool dedup)
     {
         if (dedup) {
+#if EMBED_FULL_KEY
+            std::stable_sort(data, data + len);
+            uint64_t off_1 = 0, off_2 = 0;
+            uint64_t new_seg_len = 0;
+            uint64_t last_added_fp = UINT64_MAX;
+            uint64_t last_added_fp_2 = UINT64_MAX; // 记录上一个添加的fp_2，用于去重
+
+            if (len && old_seg_len)
+            {
+                while (off_1 < len && off_2 < old_seg_len)
+                {
+                    // 跳过data中重复的条目（fp和fp_2都相同），保留下标最大的
+                    while (off_1 < len - 1 && data[off_1].fp == data[off_1 + 1].fp && data[off_1].fp_2 == data[off_1 + 1].fp_2)
+                    {
+                        off_1++;
+                    }
+                    // 跳过old_seg中重复的条目，保留下标最大的
+                    while (off_2 < old_seg_len - 1 && old_seg[off_2].fp == old_seg[off_2 + 1].fp && old_seg[off_2].fp_2 == old_seg[off_2 + 1].fp_2)
+                    {
+                        off_2++;
+                    }
+
+                    bool data_smaller = data[off_1] < old_seg[off_2];
+                    bool equal = data[off_1].fp == old_seg[off_2].fp && data[off_1].fp_2 == old_seg[off_2].fp_2;
+
+                    if (data_smaller)
+                    {
+                        if (data[off_1].local_depth == local_depth &&
+                            (data[off_1].fp != last_added_fp || data[off_1].fp_2 != last_added_fp_2))
+                        {
+                            new_seg[new_seg_len++] = data[off_1];
+                            last_added_fp = data[off_1].fp;
+                            last_added_fp_2 = data[off_1].fp_2;
+                        }
+                        off_1++;
+                    }
+                    else if (!data_smaller && !equal)
+                    {
+                        if (old_seg[off_2].fp != last_added_fp || old_seg[off_2].fp_2 != last_added_fp_2)
+                        {
+                            new_seg[new_seg_len++] = old_seg[off_2];
+                            last_added_fp = old_seg[off_2].fp;
+                            last_added_fp_2 = old_seg[off_2].fp_2;
+                        }
+                        off_2++;
+                    }
+                    else
+                    {
+                        // fp和fp_2相等，优先保留data的元素
+                        if (data[off_1].local_depth == local_depth &&
+                            (data[off_1].fp != last_added_fp || data[off_1].fp_2 != last_added_fp_2))
+                        {
+                            new_seg[new_seg_len++] = data[off_1];
+                            last_added_fp = data[off_1].fp;
+                            last_added_fp_2 = data[off_1].fp_2;
+                        }
+                        off_1++;
+                        off_2++;
+                    }
+                }
+            }
+
+            // 处理data中剩余元素
+            while (off_1 < len)
+            {
+                // 跳过重复的条目，保留下标最大的
+                while (off_1 < len - 1 && data[off_1].fp == data[off_1 + 1].fp && data[off_1].fp_2 == data[off_1 + 1].fp_2)
+                {
+                    off_1++;
+                }
+                if (data[off_1].local_depth == local_depth &&
+                    (data[off_1].fp != last_added_fp || data[off_1].fp_2 != last_added_fp_2))
+                {
+                    new_seg[new_seg_len++] = data[off_1];
+                    last_added_fp = data[off_1].fp;
+                    last_added_fp_2 = data[off_1].fp_2;
+                }
+                off_1++;
+            }
+
+            // 处理old_seg中剩余元素
+            while (off_2 < old_seg_len)
+            {
+                // 跳过重复的条目，保留下标最大的
+                while (off_2 < old_seg_len - 1 && old_seg[off_2].fp == old_seg[off_2 + 1].fp && old_seg[off_2].fp_2 == old_seg[off_2 + 1].fp_2)
+                {
+                    off_2++;
+                }
+                if (old_seg[off_2].fp != last_added_fp || old_seg[off_2].fp_2 != last_added_fp_2)
+                {
+                    new_seg[new_seg_len++] = old_seg[off_2];
+                    last_added_fp = old_seg[off_2].fp;
+                    last_added_fp_2 = old_seg[off_2].fp_2;
+                }
+                off_2++;
+            }
+            co_return new_seg_len;
+#else
             // 定义排序用的结构体
             struct SortItem
             {
@@ -809,6 +999,7 @@ namespace MYHASH
             }
             // log_err("[%lu:%lu:%lu]合并后的seg长度从%lu减少到%lu", cli_id, coro_id, this->key_num, len + old_seg_len, new_seg_len);
             co_return new_seg_len;
+#endif
         } else {
             std::sort(data, data + len);
             uint8_t sign = data[0].sign;

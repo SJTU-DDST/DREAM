@@ -46,10 +46,19 @@ struct ConnInfo
     uint64_t segloc;
 };
 
-#if TEST_SEG_SIZE
+#if DOUBLE_BUFFER_MERGE
 constexpr uint64_t SEGMENT_SIZE = 1024;
 #else
+#if TEST_SEG_SIZE
+constexpr uint64_t SEGMENT_SIZE = 8192;
+// 1024 延迟160
+// 2048 延迟100
+// 4096 IOPS提升到5200, 99延迟73
+// 8192 6200 60us
+// TODO: 分解实验，平衡更新/查找性能
+#else
 constexpr uint64_t SEGMENT_SIZE = 1024;
+#endif
 #endif
 
 #if USE_TICKET_HASH
@@ -58,7 +67,12 @@ constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t)));
 constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(uint8_t)));
 #endif
 
+#if DOUBLE_BUFFER_MERGE
+constexpr uint64_t SLOT_PER_SEG_HALF = SLOT_PER_SEG / 2;
+#endif
+
 constexpr uint64_t MAX_FP_INFO = 256;
+constexpr uint64_t SEPHASH_INIT_DEPTH = 10;
 constexpr uint64_t MAX_DEPTH = 20;
 constexpr uint64_t DIR_SIZE = (1 << MAX_DEPTH);
 
@@ -169,7 +183,7 @@ struct Slot
         if (!is_valid_ptr(offset))
             return false;
 #if MODIFIED
-        if (local_depth == 0 || local_depth > 63)
+        if (local_depth < SEPHASH_INIT_DEPTH || local_depth > MAX_DEPTH)
             return false;
 #endif
         return true;
@@ -200,8 +214,8 @@ constexpr uint64_t SLOT_TICKET_SHIFT = MERGE_CNT_SHIFT + 8; // 8 bits for merge_
 constexpr uint64_t SLOT_TICKET_INC = (1ULL << SLOT_TICKET_SHIFT);
 constexpr uint64_t SLOT_CNT_SHIFT = SLOT_TICKET_SHIFT + 22; // 22 bits for slot_ticket
 constexpr uint64_t SLOT_CNT_INC = (1ULL << SLOT_CNT_SHIFT);
-constexpr uint64_t SLOT_CNT_2_SHIFT = SLOT_CNT_SHIFT + 8; // 8 bits for slot_cnt
-constexpr uint64_t SLOT_CNT_2_INC = (1ULL << SLOT_CNT_2_SHIFT);
+// constexpr uint64_t SLOT_CNT_2_SHIFT = SLOT_CNT_SHIFT + 8; // 8 bits for slot_cnt
+// constexpr uint64_t SLOT_CNT_2_INC = (1ULL << SLOT_CNT_2_SHIFT);
 struct FetchMeta { // IMPORTANT: 可能只能用FAA/CAS来更新，否则可能影响其他客户端获得的slot_ticket
     uint8_t split_flag : 1; // 下次合并时是否分裂
     uint8_t sign : 1;       // 下次合并WriteBuffer1/2
@@ -209,24 +223,25 @@ struct FetchMeta { // IMPORTANT: 可能只能用FAA/CAS来更新，否则可能�
     uint64_t merge_ticket : 8; // 好像不需要，有cnt就行，但有双缓冲区后可能需要
     uint64_t merge_cnt : 8;
     uint64_t slot_ticket : 22; // slot_ticket用掉剩余全部位
-    uint64_t slot_cnt : 8;
-    uint64_t slot_cnt_2 : 8;
+    uint64_t slot_cnt : 16;
+    // uint64_t slot_cnt_2 : 8;
 } __attribute__((aligned(1)));
 struct CurSegMeta
 {
-    uint8_t split_flag : 1; // 下次合并时是否分裂
-    uint8_t sign : 1;       // 下次合并WriteBuffer1/2
+    uint8_t split_flag : 1; // DOUBLE_BUFFER_MERGE: 下次合并时是否分裂
+    uint8_t sign : 1;
     uint64_t local_depth : 8;
     uint64_t merge_ticket : 8;
-    uint64_t merge_cnt : 8;
+    uint64_t merge_cnt : 8;    // DOUBLE_BUFFER_MERGE: 如果merge_cnt%2 
     uint64_t slot_ticket : 22; // slot_ticket用掉剩余全部位
-    uint64_t slot_cnt : 8;
-    uint64_t slot_cnt_2 : 8;
+    uint64_t slot_cnt : 16;
+    // uint64_t slot_cnt_2 : 8;
     uintptr_t main_seg_ptr;
     uintptr_t main_seg_len;
     FpBitmapType fp_bitmap[FP_BITMAP_LENGTH];
-    // FpBitmapType fp_bitmap_2[FP_BITMAP_LENGTH];
-
+#if NEW_MERGE
+    FpBitmapType fp_bitmap_2[FP_BITMAP_LENGTH];
+#endif
     void print(std::string desc = "")
     {
         log_err("%s slot_cnt:%lu LD:%lu MS_ptr:%lx MS_len:%lu", desc.c_str(), slot_cnt, local_depth, main_seg_ptr, main_seg_len);
@@ -264,6 +279,9 @@ struct CurSeg
     uint64_t split_lock;
     CurSegMeta seg_meta;
     Slot slots[SLOT_PER_SEG];
+#if NEW_MERGE
+    Slot slots_2[SLOT_PER_SEG]; // 双缓冲区合并机制，使用两个slots数组来存储数据
+#endif
 
     void print(std::string desc = "")
     {
@@ -318,7 +336,7 @@ struct DirEntry
 
     void print(std::string desc = "")
     {
-        log_err("%s local_depth:%lu cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_lne:%lx", desc.c_str(), local_depth, cur_seg_ptr, main_seg_ptr, main_seg_len);
+        log_err("%s local_depth:%lu cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_len:%lu", desc.c_str(), local_depth, cur_seg_ptr, main_seg_ptr, main_seg_len);
     }
 
     std::string to_string(std::string desc = "") const
@@ -327,7 +345,7 @@ struct DirEntry
         ss << desc << " local_depth:" << local_depth
            << " cur_seg_ptr:" << std::hex << cur_seg_ptr
            << " main_seg_ptr:" << std::hex << main_seg_ptr
-           << " main_seg_lne:" << std::hex << main_seg_len;
+           << " main_seg_len:" << std::hex << main_seg_len;
         return ss.str();
     }
 } __attribute__((aligned(1)));
@@ -343,7 +361,7 @@ struct Directory
         log_err("%s Global_Depth:%lu", desc.c_str(), global_depth);
         for (uint64_t i = 0; i < std::max(4, (1 << global_depth)); i++)
         {
-            log_err("Entry %lx : local_depth:%lu cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_lne:%lx", i, segs[i].local_depth, segs[i].cur_seg_ptr, segs[i].main_seg_ptr, segs[i].main_seg_len);
+            log_err("Entry %lx : local_depth:%lu cur_seg_ptr:%lx main_seg_ptr:%lx main_seg_len:%lx", i, segs[i].local_depth, segs[i].cur_seg_ptr, segs[i].main_seg_ptr, segs[i].main_seg_len);
         }
     }
 
@@ -357,7 +375,7 @@ struct Directory
                << "local_depth:" << std::dec << segs[i].local_depth
                << " cur_seg_ptr:" << std::hex << segs[i].cur_seg_ptr
                << " main_seg_ptr:" << std::hex << segs[i].main_seg_ptr
-               << " main_seg_lne:" << std::hex << segs[i].main_seg_len
+               << " main_seg_len:" << std::hex << segs[i].main_seg_len
                << "\n";
         }
         return ss.str();
@@ -1055,7 +1073,7 @@ inline void fill_recv_wr(ibv_recv_wr *wr, ibv_sge *sge, void *laddr, uint32_t le
 uint64_t crc64(const void *data, size_t l);
 
 #if USE_TICKET_HASH
-inline void print_fetch_meta(uint64_t fetch, const std::string &desc = "", uint64_t addval = 0, const std::source_location &location = std::source_location::current()) {
+inline void print_fetch_meta(uint64_t fetch, const std::string &desc = "", uint64_t addval = 0, const std::source_location &location = std::source_location::current(), bool only_changes = true) {
     const FetchMeta& meta_old = *reinterpret_cast<const FetchMeta*>(&fetch);
     uint64_t newval = fetch + addval;
     const FetchMeta& meta_new = *reinterpret_cast<const FetchMeta*>(&newval);
@@ -1070,16 +1088,26 @@ inline void print_fetch_meta(uint64_t fetch, const std::string &desc = "", uint6
         if (oldv == newv) return newstr;
         else return oldstr + "->" + newstr;
     };
-    log_err("%s [%s:%d] FetchMeta: split_flag=%s, sign=%s, local_depth=%s, merge_ticket=%s, merge_cnt=%s, slot_ticket=%s, slot_cnt=%s, slot_cnt_2=%s", 
-        desc.c_str(), location.file_name(), location.line(),
-        field_fmt((unsigned)meta_old.split_flag, (unsigned)meta_new.split_flag).c_str(),
-        field_fmt((unsigned)meta_old.sign, (unsigned)meta_new.sign).c_str(),
-        field_fmt((unsigned long)meta_old.local_depth, (unsigned long)meta_new.local_depth).c_str(),
-        field_fmt((unsigned long)meta_old.merge_ticket, (unsigned long)meta_new.merge_ticket).c_str(),
-        field_fmt((unsigned long)meta_old.merge_cnt, (unsigned long)meta_new.merge_cnt).c_str(),
-        slot_ticket_fmt((unsigned long)meta_old.slot_ticket, (unsigned long)meta_new.slot_ticket).c_str(),
-        field_fmt((unsigned long)meta_old.slot_cnt, (unsigned long)meta_new.slot_cnt).c_str(),
-        field_fmt((unsigned long)meta_old.slot_cnt_2, (unsigned long)meta_new.slot_cnt_2).c_str()
-    );
+
+    std::stringstream ss;
+    ss << desc << " [" << location.file_name() << ":" << location.line() << "] FetchMeta:";
+    if (!only_changes || meta_old.split_flag != meta_new.split_flag)
+        ss << " split_flag=" << field_fmt((unsigned)meta_old.split_flag, (unsigned)meta_new.split_flag);
+    if (!only_changes || meta_old.sign != meta_new.sign)
+        ss << " sign=" << field_fmt((unsigned)meta_old.sign, (unsigned)meta_new.sign);
+    if (!only_changes || meta_old.local_depth != meta_new.local_depth)
+        ss << " local_depth=" << field_fmt((unsigned long)meta_old.local_depth, (unsigned long)meta_new.local_depth);
+    if (!only_changes || meta_old.merge_ticket != meta_new.merge_ticket)
+        ss << " merge_ticket=" << field_fmt((unsigned long)meta_old.merge_ticket, (unsigned long)meta_new.merge_ticket);
+    if (!only_changes || meta_old.merge_cnt != meta_new.merge_cnt)
+        ss << " merge_cnt=" << field_fmt((unsigned long)meta_old.merge_cnt, (unsigned long)meta_new.merge_cnt);
+    if (!only_changes || meta_old.slot_ticket != meta_new.slot_ticket)
+        ss << " slot_ticket=" << slot_ticket_fmt((unsigned long)meta_old.slot_ticket, (unsigned long)meta_new.slot_ticket);
+    if (!only_changes || meta_old.slot_cnt != meta_new.slot_cnt)
+        ss << " slot_cnt=" << field_fmt((unsigned long)meta_old.slot_cnt, (unsigned long)meta_new.slot_cnt);
+    // if (!only_changes || meta_old.slot_cnt_2 != meta_new.slot_cnt_2)
+    //     ss << " slot_cnt_2=" << field_fmt((unsigned long)meta_old.slot_cnt_2, (unsigned long)meta_new.slot_cnt_2);
+
+    log_err("%s", ss.str().c_str());
 }
 #endif
