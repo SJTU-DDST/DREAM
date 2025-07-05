@@ -8,7 +8,7 @@ namespace MYHASH
 #endif
     task<> Client::insert(Slice *key, Slice *value)
     {
-        perf.start_perf();
+        perf.start_insert();
         sum_cost.start_insert();
         op_cnt++;
         uint64_t op_size = (1 << 20) * 1;
@@ -287,16 +287,19 @@ namespace MYHASH
                 // else
                 //     log_err("[%lu:%lu:%lu]segloc:%lu的merge_cnt为%u，合并后半部分WriteBuffer！", cli_id, coro_id, this->key_num, segloc, seg_meta[segloc].merge_cnt);
 #endif
-                co_await Split(segloc, segptr, my_seg_meta); // TODO: 后台线程Split
+                perf.push_insert(); // 模拟后台线程Split，从而避免执行Split的操作有高延迟，后续补充实现
+                sum_cost.end_insert();
+                sum_cost.push_retry_cnt(retry_cnt);
+                co_await Split(segloc, segptr, my_seg_meta);
             }
             if (need_retry) goto Retry;
-            perf.push_insert();
-            sum_cost.end_insert();
-            sum_cost.push_retry_cnt(retry_cnt);
+            // perf.push_insert();
+            // sum_cost.end_insert();
+            // sum_cost.push_retry_cnt(retry_cnt);
             co_return;
         }
         if (need_retry) goto Retry;
-
+        
         perf.push_insert();
         sum_cost.end_insert();
         sum_cost.push_retry_cnt(retry_cnt);
@@ -319,21 +322,21 @@ namespace MYHASH
         uint64_t main_seg_ptr = old_seg_meta->main_seg_ptr;
         // 1. Read CurSeg
         CurSeg *cur_seg = (CurSeg *)alloc.alloc(sizeof(CurSeg));
-        co_await conn->read(seg_ptr, seg_rmr.rkey, cur_seg, sizeof(CurSeg), lmr->lkey); // TODO: 可以不读filter
-
+        auto read_cur_seg = conn->read(seg_ptr, seg_rmr.rkey, cur_seg, sizeof(CurSeg), lmr->lkey); // TODO: 可以不读filter
         // 因为只有cas写入最后一个slot的cli才会进入到对一个segment的split，所以不用对Segment额外加锁
-        if (cur_seg->seg_meta.main_seg_ptr != old_seg_meta->main_seg_ptr || cur_seg->seg_meta.local_depth != local_depth)
-        {
-            // 不应该发生，直接报错
-            log_err("[%lu:%lu:%lu] inconsistent ptr at segloc:%lx local-lp:%lu remote-lp:%lu local-main_ptr:%lx remote-main_ptr:%lx", cli_id, coro_id, this->key_num, seg_loc, local_depth, dir->segs[seg_loc].local_depth, old_seg_meta->main_seg_ptr, dir->segs[seg_loc].main_seg_ptr);
-            exit(-1);
-        }
+        // if (cur_seg->seg_meta.main_seg_ptr != old_seg_meta->main_seg_ptr || cur_seg->seg_meta.local_depth != local_depth)
+        // {
+        //     // 不应该发生，直接报错
+        //     log_err("[%lu:%lu:%lu] inconsistent ptr at segloc:%lx local-lp:%lu remote-lp:%lu local-main_ptr:%lx remote-main_ptr:%lx", cli_id, coro_id, this->key_num, seg_loc, local_depth, dir->segs[seg_loc].local_depth, old_seg_meta->main_seg_ptr, dir->segs[seg_loc].main_seg_ptr);
+        //     exit(-1);
+        // }
 
         // 2. Read MainSeg
         uint64_t main_seg_size = sizeof(Slot) * dir->segs[seg_loc].main_seg_len;
         MainSeg *main_seg = (MainSeg *)alloc.alloc(main_seg_size);
         if (main_seg_size)
             co_await conn->read(dir->segs[seg_loc].main_seg_ptr, seg_rmr.rkey, main_seg, main_seg_size, lmr->lkey);
+        co_await std::move(read_cur_seg);
 
         // 3. Sort Segment
         MainSeg *new_main_seg = (MainSeg *)alloc.alloc(main_seg_size + sizeof(Slot) * SLOT_PER_SEG);
@@ -397,7 +400,7 @@ namespace MYHASH
         // if (new_seg_len != SLOT_PER_SEG + dir->segs[seg_loc].main_seg_len)
             // log_err("将segloc:%lu/%lu的%d个CurSeg条目合并到%d个MainSeg条目，new_seg_len:%lu", seg_loc, (1ull << global_depth) - 1, SLOT_PER_SEG, dir->segs[seg_loc].main_seg_len, new_seg_len);
         // 4. Split (为了减少协程嵌套层次的开销，这里就不抽象成单独的函数了)
-        if (dir->segs[seg_loc].main_seg_len >= MAX_MAIN_SIZE && local_depth < MAX_DEPTH)
+        if (dir->segs[seg_loc].main_seg_len >= MAX_MAIN_SIZE && local_depth < MAX_DEPTH) // Split
         {
             // 为了避免覆盖bug，同时Merge/Local Split中都额外更新了一倍的DirEntry
             // 因此Global Split不用处理DirEntry翻倍操作，只需要更新Global Depth
@@ -646,7 +649,11 @@ namespace MYHASH
         cur_seg->seg_meta.main_seg_len = new_seg_len; // main_seg_size / sizeof(Slot) + SLOT_PER_SEG;
         this->offset[seg_loc].offset = 0;
         memset(cur_seg->seg_meta.fp_bitmap, 0, sizeof(FpBitmapType) * FP_BITMAP_LENGTH);
-        co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, sizeof(CurSegMeta) - sizeof(uint64_t), lmr->lkey);
+        size_t write_size = sizeof(CurSegMeta) - sizeof(uint64_t);
+#if NEW_MERGE
+        write_size -= sizeof(FpBitmapType) * FP_BITMAP_LENGTH; // 不写入fp_bitmap_2
+#endif
+        co_await conn->write(seg_ptr + 2 * sizeof(uint64_t), seg_rmr.rkey, ((uint64_t *)cur_seg) + 2, write_size, lmr->lkey);
 
         // 5.2 Update new-main-ptr for DirEntries
         if (dir->global_depth < local_depth) co_await check_gd();

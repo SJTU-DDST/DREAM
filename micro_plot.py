@@ -30,7 +30,7 @@ def parse_txt_file(file_path):
     iops = float(iops_match.group(1)) if iops_match else None
     
     # Check if this is a read operation
-    is_read_workload = "data_read" in content or "search" in content
+    is_read_workload = "data_read" in file_path
     
     # For read workload, only look for search latency
     if is_read_workload:

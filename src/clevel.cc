@@ -305,7 +305,7 @@ task<> Client::cal_utilization(){
 
 task<> Client::insert(Slice *key, Slice *value)
 {
-    perf.start_perf();
+    perf.start_insert();
     sum_cost.start_insert();
     op_cnt++;
     uint64_t op_size = (1 << 20) * 1;
@@ -681,7 +681,7 @@ Retry:
 
 task<bool> Client::search(Slice *key, Slice *value)
 {
-    perf.start_perf();
+    perf.start_search();
     auto pattern = hash(key->data, key->len);
     uint64_t pattern_1 = (uint64_t)pattern;
     uint64_t pattern_2 = (uint64_t)(pattern >> 64);

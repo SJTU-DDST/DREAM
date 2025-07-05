@@ -28,22 +28,22 @@ else
         echo -n "cli $cli: "
         grep "Run IOPS" ./out$cli.txt
         grep "latency" ./out$cli.txt | head -n 1
-        cli_num=$3
-        coro_num=$4
-        for ((cli_id=0; cli_id<cli_num; cli_id++)); do
-            for ((coro_id=0; coro_id<coro_num; coro_id++)); do
-                # 设置要匹配的文件名
-                filename="insert_lat${cli_id}${coro_id}.txt"
-                echo $filename
-                # 执行SCP命令，从远程服务器复制文件到本地并修改文件名
-                sshpass -p "1111" scp "congyong@$cli:/home/congyong/$filename" "./insert_lat${cli_id}${coro_id}$cli.txt"
+        # cli_num=$3
+        # coro_num=$4
+        # for ((cli_id=0; cli_id<cli_num; cli_id++)); do
+        #     for ((coro_id=0; coro_id<coro_num; coro_id++)); do
+        #         # 设置要匹配的文件名
+        #         filename="insert_lat${cli_id}${coro_id}.txt"
+        #         echo $filename
+        #         # 执行SCP命令，从远程服务器复制文件到本地并修改文件名
+        #         sshpass -p "1111" scp "congyong@$cli:/home/congyong/$filename" "./insert_lat${cli_id}${coro_id}$cli.txt"
                 
-                filename="search_lat${cli_id}${coro_id}.txt"
-                echo $filename
-                # 执行SCP命令，从远程服务器复制文件到本地并修改文件名
-                sshpass -p "1111" scp "congyong@$cli:/home/congyong/$filename" "./search_lat${cli_id}${coro_id}$cli.txt"
-            done
-        done
+        #         filename="search_lat${cli_id}${coro_id}.txt"
+        #         echo $filename
+        #         # 执行SCP命令，从远程服务器复制文件到本地并修改文件名
+        #         sshpass -p "1111" scp "congyong@$cli:/home/congyong/$filename" "./search_lat${cli_id}${coro_id}$cli.txt"
+        #     done
+        # done
         ((cnt += 1))
     done
 fi

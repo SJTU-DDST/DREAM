@@ -493,7 +493,7 @@ task<> Client::cal_utilization(){
 
 task<> Client::insert(Slice *key, Slice *value)
 {
-    perf.start_perf();
+    perf.start_insert();
     sum_cost.start_insert();
     print_flag = false;
     op_cnt++;
@@ -1099,7 +1099,7 @@ task<> Client::migrate_bot(char *group_pointer, uint64_t source_level, uint64_t 
 
 task<bool> Client::search(Slice *key, Slice *value)
 {
-    perf.start_perf();
+    perf.start_search();
     // print_flag = true;
     uint64_t pattern = hash(key->data, key->len);
     uint64_t tmp_fp = fp(pattern);

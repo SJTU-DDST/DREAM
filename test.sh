@@ -174,13 +174,13 @@ set_fp_collision_mode() {
     local common_h_path="../include/common.h"
     local value=1
     
-    if [ "$enable" == "false" ]; then
-        value=0
-    fi
+    # if [ "$enable" == "false" ]; then
+    #     value=0
+    # fi
     
-    # 修改设置
-    sed -i "s/#define READ_FULL_KEY_ON_FP_COLLISION [0-1]/#define READ_FULL_KEY_ON_FP_COLLISION ${value}/" "$common_h_path"
-    # echo "设置 READ_FULL_KEY_ON_FP_COLLISION 为 ${value}"
+    # # 修改设置
+    # sed -i "s/#define READ_FULL_KEY_ON_FP_COLLISION [0-1]/#define READ_FULL_KEY_ON_FP_COLLISION ${value}/" "$common_h_path"
+    # # echo "设置 READ_FULL_KEY_ON_FP_COLLISION 为 ${value}"
 }
 # mainseg大小到一定阈值再批量去重一次？这样可以减少重复键的数量，但尾部延迟增加一些
 

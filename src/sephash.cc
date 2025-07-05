@@ -424,7 +424,7 @@ task<uintptr_t> Client::check_gd(uint64_t segloc, bool read_fp, bool recursive)
 task<> Client::insert(Slice *key, Slice *value)
 {
     // log_err("insert key:%lu value:%s", *(uint64_t *)key->data, value->data);
-    perf.start_perf();
+    perf.start_insert();
     sum_cost.start_insert();
     op_cnt++;
     uint64_t op_size = (1 << 20) * 1;
@@ -1244,7 +1244,7 @@ task<> Client::print_main_seg(uint64_t seg_loc,uintptr_t main_seg_ptr, uint64_t 
 task<std::tuple<uintptr_t, uint64_t>> Client::search(Slice *key, Slice *value)
 {
     // log_err("search key:%lu value:%s", *(uint64_t *)key->data, value->data);
-    perf.start_perf();
+    perf.start_search();
     // 1. Cal Segloc && Pattern
     uint64_t pattern = (uint64_t)hash(key->data, key->len);
     uint64_t pattern_fp1 = fp(pattern);

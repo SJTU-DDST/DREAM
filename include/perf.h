@@ -14,15 +14,14 @@
 struct Perf
 {
     //用于性能统计
-    std::vector<double> insert_lat;
-    std::vector<double> search_lat;
+    std::vector<double> insert_lat, search_lat;
     std::map<std::string, std::vector<double>> lat_map;
-    std::chrono::high_resolution_clock::time_point start;
+    std::chrono::high_resolution_clock::time_point insert_start, search_start;
     std::chrono::high_resolution_clock::time_point end;
     
     void init(){
         insert_lat.reserve(10000000);
-        search_lat.reserve(1000000);
+        search_lat.reserve(10000000);
     }
 
     void init(uint64_t insert_num,uint64_t search_num){
@@ -30,45 +29,57 @@ struct Perf
         search_lat.reserve(search_num);
     }
 
-    void start_perf(){
+    //     void start_perf() { // 之前insert/search共用start_perf，在insert中调用search后，insert的start会被覆盖，导致延迟偏短
+    // #ifdef USE_PERF
+    //         start = std::chrono::high_resolution_clock::now();
+    // #endif
+    //     }
+
+    void start_insert() {
 #ifdef USE_PERF
-        start = std::chrono::high_resolution_clock::now();
+        insert_start = std::chrono::high_resolution_clock::now();
 #endif
     }
 
-    void push_insert(){
+    void start_search() {
+#ifdef USE_PERF
+        search_start = std::chrono::high_resolution_clock::now();
+#endif
+    }
+
+    void push_insert() {
 #ifdef USE_PERF
         end = std::chrono::high_resolution_clock::now();
-        double duration = std::chrono::duration<double, std::micro>(end - start).count();
+        double duration = std::chrono::duration<double, std::micro>(end - insert_start).count();
         insert_lat.push_back(duration);
 #endif
     }
 
-    void push_search(){
+    void push_search() {
 #ifdef USE_PERF
         end = std::chrono::high_resolution_clock::now();
-        double duration = std::chrono::duration<double, std::micro>(end - start).count();
+        double duration = std::chrono::duration<double, std::micro>(end - search_start).count();
         search_lat.push_back(duration);
 #endif
     }
 
-    void push_perf(const std::string& type) {
-#ifdef USE_PERF
-        end = std::chrono::high_resolution_clock::now();
-        double duration = std::chrono::duration<double, std::micro>(end - start).count();
-        if (type == "insert") {
-            insert_lat.push_back(duration);
-        } else if (type == "search") {
-            search_lat.push_back(duration);
-        } else {
-            if (lat_map.find(type) == lat_map.end()) {
-                lat_map[type] = {duration};
-            } else {
-                lat_map[type].push_back(duration);
-            }
-        }
-#endif
-    }
+//     void push_perf(const std::string& type) {
+// #ifdef USE_PERF
+//         end = std::chrono::high_resolution_clock::now();
+//         double duration = std::chrono::duration<double, std::micro>(end - start).count();
+//         if (type == "insert") {
+//             insert_lat.push_back(duration);
+//         } else if (type == "search") {
+//             search_lat.push_back(duration);
+//         } else {
+//             if (lat_map.find(type) == lat_map.end()) {
+//                 lat_map[type] = {duration};
+//             } else {
+//                 lat_map[type].push_back(duration);
+//             }
+//         }
+// #endif
+//     }
 
     void to_file(const char* file_name,std::vector<double>& lat){
 #ifdef USE_PERF
@@ -88,10 +99,10 @@ struct Perf
 
     void print(uint64_t cli_id, uint64_t coro_id) {
 #ifdef USE_PERF
-        std::string insert_file_name = "insert_lat" + std::to_string(cli_id) + std::to_string(coro_id) + ".txt";
-        to_file(insert_file_name.c_str(), insert_lat);
-        std::string search_file_name = "search_lat" + std::to_string(cli_id) + std::to_string(coro_id) + ".txt";
-        to_file(search_file_name.c_str(), search_lat);
+        // std::string insert_file_name = "insert_lat" + std::to_string(cli_id) + std::to_string(coro_id) + ".txt";
+        // to_file(insert_file_name.c_str(), insert_lat);
+        // std::string search_file_name = "search_lat" + std::to_string(cli_id) + std::to_string(coro_id) + ".txt";
+        // to_file(search_file_name.c_str(), search_lat);
 
         auto print_stats = [cli_id, coro_id](const std::vector<double>& latencies, const std::string& name) {
             if (latencies.empty()) return;

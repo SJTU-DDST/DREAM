@@ -300,7 +300,7 @@ void print_buc(Bucket* buc){
 
 task<> Client::insert(Slice *key, Slice *value)
 {
-    perf.start_perf();
+    perf.start_insert();
     sum_cost.start_insert();
     alloc.ReSet(sizeof(Directory));
     uint64_t pattern_1, pattern_2;
@@ -735,7 +735,7 @@ task<> Client::UnlockDir()
 
 task<std::tuple<uintptr_t, uint64_t>> Client::search(Slice *key, Slice *value)
 {
-    perf.start_perf();
+    perf.start_search();
     alloc.ReSet(sizeof(Directory));
 
     // 1st RTT: Using RDMA doorbell batching to fetch two combined buckets
@@ -937,7 +937,7 @@ Retry:
 
 task<> Client::update(Slice *key,Slice *value)
 {
-    perf.start_perf();
+    perf.start_insert();
     char data[1024];
     Slice ret_value;
     ret_value.data = data;
@@ -955,7 +955,7 @@ task<> Client::update(Slice *key,Slice *value)
 Retry:
     alloc.ReSet(sizeof(Directory)+kvblock_len);
     if (retry_cnt++ == 10000000) {
-        perf.push_perf("update");
+        perf.push_insert();
         sum_cost.push_retry_cnt(retry_cnt);
         log_err("[%lu:%lu]retry_cnt exceed %d for key:%lx",cli_id,coro_id,retry_cnt,*(uint64_t*)key->data);
         co_return;

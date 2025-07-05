@@ -1,19 +1,5 @@
 # DREAM
-
-DREAM is a high-performance hash index on disaggregated memory that minimizes network overhead during writes. This repository is forked from [SepHash](https://github.com/minxinhao/SepHash).
-
-## Feature Highlights
-
-- High write performance under inserts and uniform and skewed updates.
-- Read performance comparable to RACE, much better than other leveling hash indexes ported to disaggregated memory.
-- High space utilization with very low metadata overhead.
-- Good scalability with number of clients and servers.
-
-## Usage
-
-- Arbitrary length key and value organized as a Slice.
-- Provides high-performance single-point insert, search, delete, and update operations.
-- Conveniently extends the number of servers and clients
+WIP
 
 ## Building
 

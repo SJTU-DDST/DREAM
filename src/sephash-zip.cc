@@ -249,7 +249,7 @@ task<uintptr_t> Client::check_gd(uint64_t segloc = -1)
 
 task<> Client::insert(Slice *key, Slice *value)
 {
-    perf.start_perf();
+    perf.start_insert();
     op_cnt++;
     uint64_t op_size = (1 << 20) * 1;
     // 因为存在pure_write,为上一个操作保留的空间，1MB够用了
@@ -778,7 +778,7 @@ task<> Client::check_segloc(uint64_t seg_loc){
 
 task<std::tuple<uintptr_t, uint64_t>> Client::search(Slice *key, Slice *value)
 {
-    perf.start_perf();
+    perf.start_search();
     // 1. Cal Segloc && Pattern
     uint64_t pattern = (uint64_t)hash(key->data, key->len);
     uint64_t pattern_fp1 = fp(pattern);
