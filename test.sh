@@ -70,7 +70,30 @@ modify_num_op() {
     fi
 }
 
-# 解析实验类型并可能修改 value_len
+# 新增函数：解析_CurSegSlots后缀并修改SLOT_PER_SEG
+parse_cursegslots_size() {
+    local full_exp_type=$1
+    local base_exp_type=$full_exp_type
+    local cursegslots_value=0
+    local aiordma_path="../include/aiordma.h"
+    if [[ "$full_exp_type" =~ _CurSegSlots([0-9]+)$ ]]; then
+        cursegslots_value="${BASH_REMATCH[1]}"
+        base_exp_type="${full_exp_type%%_CurSegSlots*}"
+        echo "检测到 _CurSegSlots${cursegslots_value} 后缀，设置 SLOT_PER_SEG 为 ${cursegslots_value}" >&2
+        sed -i "s/constexpr uint64_t SLOT_PER_SEG = [0-9]\+;/constexpr uint64_t SLOT_PER_SEG = ${cursegslots_value};/" "$aiordma_path"
+        grep "constexpr uint64_t SLOT_PER_SEG" "$aiordma_path" >&2
+    fi
+    echo "$base_exp_type"
+}
+
+# 恢复默认的 SLOT_PER_SEG
+restore_default_slot_per_seg() {
+    local aiordma_path="../include/aiordma.h"
+    echo "恢复默认 SLOT_PER_SEG 为 128"
+    sed -i "s/constexpr uint64_t SLOT_PER_SEG = [0-9]\+;/constexpr uint64_t SLOT_PER_SEG = 128;/" "$aiordma_path"
+}
+
+# 解析实验类型并可能修改 value_len 和 SLOT_PER_SEG
 base_experiment_type=$(parse_experiment_size "$experiment_type")
 # 如果 base_experiment_type 与 experiment_type 不同，说明包含 _size 后缀
 if [ "$base_experiment_type" != "$experiment_type" ]; then
@@ -78,6 +101,12 @@ if [ "$base_experiment_type" != "$experiment_type" ]; then
     # 如果包含 _size 后缀，修改对应脚本中的 num_op
     modify_num_op "$base_experiment_type" false
     experiment_type="$base_experiment_type"
+fi
+# 新增：处理_CurSegSlots后缀
+base_experiment_type2=$(parse_cursegslots_size "$experiment_type")
+if [ "$base_experiment_type2" != "$experiment_type" ]; then
+    echo "实际运行实验类型: $base_experiment_type2 (原始: $experiment_type)"
+    experiment_type="$base_experiment_type2"
 fi
 
 # 解析可选的线程数列表参数（第三个参数）
@@ -437,3 +466,6 @@ restore_default_value_len
 if [ "$base_experiment_type" != "$original_experiment_type" ]; then
     modify_num_op "$experiment_type" true
 fi
+
+# 在脚本结尾恢复 SLOT_PER_SEG
+restore_default_slot_per_seg

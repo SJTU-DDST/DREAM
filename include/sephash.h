@@ -29,7 +29,7 @@ constexpr uint64_t SEGMENT_SIZE = SLOT_PER_SEG * sizeof(Slot); // 因为Slot嵌�
 constexpr uint64_t SLOT_BATCH_SIZE = 8;
 constexpr uint64_t RETRY_LIMIT = (SLOT_PER_SEG/SLOT_BATCH_SIZE); // TODO : 后期试试改成其他较小的值
 #if TEST_SEG_SIZE
-constexpr uint64_t MAX_MAIN_SIZE = 64 * SLOT_PER_SEG; // 256 * SLOT_PER_SEG; // 增大CurSeg，暂时避免分裂
+constexpr uint64_t MAX_MAIN_SIZE = 64 * 128; // 256 * SLOT_PER_SEG; // 增大CurSeg，暂时避免分裂
 constexpr uint64_t INIT_DEPTH = SEPHASH_INIT_DEPTH;   // 越大性能越好，因为写入不容易碰到合并，但占用更多网卡资源
 // TODO: 能否利用SRQ_limit一次注册16个，同时在服务端有变量维护已经注册了多少个
 

@@ -46,26 +46,28 @@ struct ConnInfo
     uint64_t segloc;
 };
 
-#if DOUBLE_BUFFER_MERGE
-constexpr uint64_t SEGMENT_SIZE = 1024;
-#else
-#if TEST_SEG_SIZE
-constexpr uint64_t SEGMENT_SIZE = 8192;
-// 1024 延迟160
-// 2048 延迟100
-// 4096 IOPS提升到5200, 99延迟73
-// 8192 6200 60us
-// TODO: 分解实验，平衡更新/查找性能
-#else
-constexpr uint64_t SEGMENT_SIZE = 1024;
-#endif
-#endif
+// #if DOUBLE_BUFFER_MERGE
+// constexpr uint64_t SEGMENT_SIZE = 1024;
+// #else
+// #if TEST_SEG_SIZE
+// constexpr uint64_t SEGMENT_SIZE = 8192;
+// // 1024 延迟160
+// // 2048 延迟100
+// // 4096 IOPS提升到5200, 99延迟73
+// // 8192 6200 60us
+// // TODO: 分解实验，平衡更新/查找性能
+// #else
+// constexpr uint64_t SEGMENT_SIZE = 1024;
+// #endif
+// #endif
 
-#if USE_TICKET_HASH
-constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t)));
-#else
-constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(uint8_t)));
-#endif
+// #if USE_TICKET_HASH
+// constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t))); //根据读写比例动态调整？
+// #else
+// constexpr uint64_t SLOT_PER_SEG = ((SEGMENT_SIZE) / (sizeof(uint64_t) + sizeof(uint8_t)));
+// #endif
+
+constexpr uint64_t SLOT_PER_SEG = 128;
 
 #if DOUBLE_BUFFER_MERGE
 constexpr uint64_t SLOT_PER_SEG_HALF = SLOT_PER_SEG / 2;
