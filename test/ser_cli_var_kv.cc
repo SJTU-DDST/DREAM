@@ -53,7 +53,9 @@ void GenKey(uint64_t key, uint64_t *tmp_key)
         tmp_key[i] = data_key;
 }
 
+#ifdef ONLY_FIRST_CORO_START
 std::unique_ptr<std::barrier<>> barrier;
+#endif
 
 // hash函数用于key路由到server
 inline size_t key_server_hash(uint64_t key, size_t num_server) {
@@ -64,8 +66,8 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> load(std::vector<Client*>& clis, uint64_t cli_id, uint64_t coro_id)
 {
-    barrier->arrive_and_wait();
 #ifdef ONLY_FIRST_CORO_START
+    barrier->arrive_and_wait();
     if (cli_id == 0 && coro_id == 0)
         co_await clis[0]->start(config.num_machine);
     barrier->arrive_and_wait();
@@ -134,9 +136,8 @@ task<> load(std::vector<Client*>& clis, uint64_t cli_id, uint64_t coro_id)
 #endif
 
     // All threads wait at barrier before stopping
-    barrier->arrive_and_wait();
-
 #ifdef ONLY_FIRST_CORO_START
+    barrier->arrive_and_wait();
     // Only first coroutine in each machine calls stop
     if (cli_id == 0 && coro_id == 0) {
         co_await clis[0]->stop();
@@ -145,7 +146,11 @@ task<> load(std::vector<Client*>& clis, uint64_t cli_id, uint64_t coro_id)
     // Wait for stop to complete before any thread returns
     barrier->arrive_and_wait();
 #else
+#if USE_END_CNT
+    co_await clis[0]->stop(config.num_machine * config.num_cli * config.num_coro);
+#else
     co_await clis[0]->stop();
+#endif
 #endif
     
     co_return;
@@ -155,13 +160,17 @@ template <class Client>
     requires KVTrait<Client, Slice *, Slice *>
 task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t coro_id)
 {
-    barrier->arrive_and_wait();
 #ifdef ONLY_FIRST_CORO_START
+    barrier->arrive_and_wait();
     if (cli_id == 0 && coro_id == 0)
         co_await clis[0]->start(config.num_machine);
     barrier->arrive_and_wait();
 #else
+#if USE_END_CNT
+    co_await clis[0]->start(2 * config.num_machine * config.num_cli * config.num_coro);
+#else
     co_await clis[0]->start(config.num_machine * config.num_cli * config.num_coro);
+#endif
 #endif
     uint64_t tmp_key[key_len];
     char buffer[8192];
@@ -298,8 +307,8 @@ task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t
         }
     }
     // All threads wait at barrier before stopping
-    barrier->arrive_and_wait();
 #ifdef ONLY_FIRST_CORO_START
+    barrier->arrive_and_wait();
     // Only first coroutine in each machine calls stop
     if (cli_id == 0 && coro_id == 0)
     {
@@ -309,7 +318,11 @@ task<> run(Generator *gen, std::vector<Client*>& clis, uint64_t cli_id, uint64_t
     // Wait for stop to complete before any thread returns
     barrier->arrive_and_wait();
 #else
+#if USE_END_CNT
+    co_await clis[0]->stop(2 * config.num_machine * config.num_cli * config.num_coro);
+#else
     co_await clis[0]->stop();
+#endif
 #endif
 #ifdef KEY_COUNT
     // 输出统计信息
@@ -351,7 +364,9 @@ int main(int argc, char *argv[])
 {
     signal(SIGPIPE, SIG_IGN);
     config.ParseArg(argc, argv);
+#ifdef ONLY_FIRST_CORO_START
     barrier = std::make_unique<std::barrier<>>(config.num_cli * config.num_coro);
+#endif
     load_num = config.load_num;
     if (config.is_server)
     {

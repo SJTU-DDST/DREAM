@@ -1,2 +1,2 @@
-make -j112; clear; ./ser_cli_var_kv --server_ip 192.168.98.74 --num_machine 1 --num_coro 1 --gid_idx 1 --max_coro 256 --cq_size 64 --machine_id 0 --load_num 0 --pattern_type 0 --insert_frac 1.0 --read_frac 0.0 --update_frac 0.0 --delete_frac 0.0 --read_size 64 --num_cli 32 --num_op 10000000
+make -j112; clear; ./ser_cli_var_kv --server_ip 192.168.98.70 --num_machine 1 --num_coro 1 --gid_idx 1 --max_coro 256 --cq_size 64 --machine_id 0 --load_num 0 --pattern_type 0 --insert_frac 1.0 --read_frac 0.0 --update_frac 0.0 --delete_frac 0.0 --read_size 64 --num_cli 32 --num_op 10000000
 # screen timeout 5m ./ser_cli_var_kv --server --gid_idx 1 --max_coro 256 --cq_size 64 --mem_size 61268055040

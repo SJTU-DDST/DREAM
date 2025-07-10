@@ -314,6 +314,37 @@ std::random_device rd;
 std::mt19937 gen(rd());
 std::uniform_int_distribution<> dis(5, 20);
 
+#if USE_END_CNT
+task<> Client::start(uint64_t total)
+{
+    co_await sync_dir();
+    uint64_t *start_cnt = (uint64_t *)alloc.alloc(sizeof(uint64_t), true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
+    co_await conn->fetch_add(seg_rmr.raddr + sizeof(Directory) - 2 * sizeof(uint64_t), seg_rmr.rkey, *start_cnt, 1);
+    // print seg_rmr.raddr
+    // log_err("[%lu:%lu]准备开始%lx Start_cnt:%lu/%lu", cli_id, coro_id, seg_rmr.raddr + sizeof(Directory) - 2 * sizeof(uint64_t), *start_cnt, total);
+    while ((*start_cnt) < total) // FIXME: read的时候，其他线程已经stop并且减少cnt了，导致死锁
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
+        co_await conn->read(seg_rmr.raddr + sizeof(Directory) - 2 * sizeof(uint64_t), seg_rmr.rkey, start_cnt, sizeof(uint64_t), lmr->lkey);
+        // log_err("[%lu:%lu]重复读取开始%lx Start_cnt:%lu/%lu", cli_id, coro_id, seg_rmr.raddr + sizeof(Directory) - 2 * sizeof(uint64_t), *start_cnt, total);
+    }
+}
+
+task<> Client::stop(uint64_t total)
+{
+    uint64_t *start_cnt = (uint64_t *)alloc.alloc(sizeof(uint64_t));
+    std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
+    co_await conn->fetch_add(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, *start_cnt, 1);
+    // log_err("[%lu:%lu]准备结束%lx End_cnt:%lu/%lu", cli_id, coro_id, seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), *start_cnt, total);
+    while ((*start_cnt) < total)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
+        co_await conn->read(seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), seg_rmr.rkey, start_cnt, sizeof(uint64_t), lmr->lkey);
+        // log_err("[%lu:%lu]重复读取结束%lx End_cnt:%lu/%lu", cli_id, coro_id, seg_rmr.raddr + sizeof(Directory) - sizeof(uint64_t), *start_cnt, total);
+    }
+}
+#else
 task<> Client::start(uint64_t total)
 {
     co_await sync_dir();
@@ -345,6 +376,7 @@ task<> Client::stop()
         // std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen))); // IMPORTANT: 通过FAA让所有客户端一起结束，为了避免CPU占用过高，这里加了一个sleep
     }
 }
+#endif
 
 task<> Client::sync_dir()
 {

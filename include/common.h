@@ -80,6 +80,7 @@ constexpr int DEDUPLICATE_INTERVAL = 4; // 对于zipf99，线程数少实际上�
 // #define INTEGRATED_SLOT_CNT 1 // 将 local_depth 和 slot_cnt 合并到一个 uint64_t 类型的位域中。
 // #define ALLOW_KEY_OVERLAP // 允许不同thread/coroutine的key范围重叠。即使key范围不重叠，也可能映射到同一个CurSeg，导致CAS失败。
 #define RETRY_CAS 1 // 更新中CAS失败后重试。
+#define USE_END_CNT 0
 
 #define LOG_LEVEL_NONE 0
 #define LOG_LEVEL_ERROR 1

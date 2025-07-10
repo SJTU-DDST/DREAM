@@ -357,6 +357,9 @@ struct Directory
     uint64_t global_depth;   // number of segment
     DirEntry segs[DIR_SIZE]; // Directory use MSB and is allocated enough space in advance.
     uint64_t start_cnt;      // 为多客户端同步保留的字段，不影响原有空间布局
+#if USE_END_CNT
+    uint64_t end_cnt = 0;
+#endif
 
     void print(std::string desc = "")
     {

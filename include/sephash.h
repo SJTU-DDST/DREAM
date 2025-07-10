@@ -285,7 +285,11 @@ class Client : public BasicDB
 
     // Used for sync operation and test
     task<> start(uint64_t total);
+#if USE_END_CNT
+    task<> stop(uint64_t total);
+#else
     task<> stop();
+#endif
     task<> reset_remote();
     task<> cal_utilization();
 
